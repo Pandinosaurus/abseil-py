@@ -80,6 +80,7 @@ import collections
 from collections import abc
 import getpass
 import io
+import inspect
 import itertools
 import logging
 import os
@@ -88,7 +89,6 @@ import struct
 import sys
 import tempfile
 import threading
-import tempfile
 import time
 import timeit
 import traceback
@@ -98,11 +98,13 @@ import warnings
 from absl import flags
 from absl.logging import converter
 
+# pylint: disable=g-import-not-at-top
 try:
   from typing import NoReturn
 except ImportError:
   pass
 
+# pylint: enable=g-import-not-at-top
 
 FLAGS = flags.FLAGS
 
@@ -165,10 +167,9 @@ class _VerbosityFlag(flags.Flag):
   """Flag class for -v/--verbosity."""
 
   def __init__(self, *args, **kwargs):
-    super(_VerbosityFlag, self).__init__(
-        flags.IntegerParser(),
-        flags.ArgumentSerializer(),
-        *args, **kwargs)
+    super().__init__(
+        flags.IntegerParser(), flags.ArgumentSerializer(), *args, **kwargs
+    )
 
   @property
   def value(self):
@@ -207,10 +208,9 @@ class _LoggerLevelsFlag(flags.Flag):
   """Flag class for --logger_levels."""
 
   def __init__(self, *args, **kwargs):
-    super(_LoggerLevelsFlag, self).__init__(
-        _LoggerLevelsParser(),
-        _LoggerLevelsSerializer(),
-        *args, **kwargs)
+    super().__init__(
+        _LoggerLevelsParser(), _LoggerLevelsSerializer(), *args, **kwargs
+    )
 
   @property
   def value(self):
@@ -251,24 +251,22 @@ class _LoggerLevelsParser(flags.ArgumentParser):
     return levels
 
 
-class _LoggerLevelsSerializer(object):
+class _LoggerLevelsSerializer:
   """Serializer for --logger_levels flag."""
 
   def serialize(self, value):
     if isinstance(value, str):
       return value
-    return ','.join(
-        '{}:{}'.format(name, level) for name, level in value.items())
+    return ','.join(f'{name}:{level}' for name, level in value.items())
 
 
 class _StderrthresholdFlag(flags.Flag):
   """Flag class for --stderrthreshold."""
 
   def __init__(self, *args, **kwargs):
-    super(_StderrthresholdFlag, self).__init__(
-        flags.ArgumentParser(),
-        flags.ArgumentSerializer(),
-        *args, **kwargs)
+    super().__init__(
+        flags.ArgumentParser(), flags.ArgumentSerializer(), *args, **kwargs
+    )
 
   @property
   def value(self):
@@ -295,44 +293,76 @@ class _StderrthresholdFlag(flags.Flag):
     self._value = v
 
 
-flags.DEFINE_boolean('logtostderr',
-                     False,
-                     'Should only log to stderr?', allow_override_cpp=True)
-flags.DEFINE_boolean('alsologtostderr',
-                     False,
-                     'also log to stderr?', allow_override_cpp=True)
-flags.DEFINE_string('log_dir',
-                    os.getenv('TEST_TMPDIR', ''),
-                    'directory to write logfiles into',
-                    allow_override_cpp=True)
-flags.DEFINE_flag(_VerbosityFlag(
-    'verbosity', -1,
-    'Logging verbosity level. Messages logged at this level or lower will '
-    'be included. Set to 1 for debug logging. If the flag was not set or '
-    'supplied, the value will be changed from the default of -1 (warning) to '
-    '0 (info) after flags are parsed.',
-    short_name='v', allow_hide_cpp=True))
-flags.DEFINE_flag(
+LOGTOSTDERR = flags.DEFINE_boolean(
+    'logtostderr',
+    False,
+    'Should only log to stderr?',
+    allow_override_cpp=True,
+)
+ALSOLOGTOSTDERR = flags.DEFINE_boolean(
+    'alsologtostderr',
+    False,
+    'also log to stderr?',
+    allow_override_cpp=True,
+)
+LOG_DIR = flags.DEFINE_string(
+    'log_dir',
+    os.getenv('TEST_TMPDIR', ''),
+    'directory to write logfiles into',
+    allow_override_cpp=True,
+)
+VERBOSITY = flags.DEFINE_flag(
+    _VerbosityFlag(
+        'verbosity',
+        -1,
+        (
+            'Logging verbosity level. Messages logged at this level or lower'
+            ' will be included. Set to 1 for debug logging. If the flag was not'
+            ' set or supplied, the value will be changed from the default of -1'
+            ' (warning) to 0 (info) after flags are parsed.'
+        ),
+        short_name='v',
+        allow_hide_cpp=True,
+    )
+)
+LOGGER_LEVELS = flags.DEFINE_flag(
     _LoggerLevelsFlag(
-        'logger_levels', {},
-        'Specify log level of loggers. The format is a CSV list of '
-        '`name:level`. Where `name` is the logger name used with '
-        '`logging.getLogger()`, and `level` is a level name  (INFO, DEBUG, '
-        'etc). e.g. `myapp.foo:INFO,other.logger:DEBUG`'))
-flags.DEFINE_flag(_StderrthresholdFlag(
-    'stderrthreshold', 'fatal',
-    'log messages at this level, or more severe, to stderr in '
-    'addition to the logfile.  Possible values are '
-    "'debug', 'info', 'warning', 'error', and 'fatal'.  "
-    'Obsoletes --alsologtostderr. Using --alsologtostderr '
-    'cancels the effect of this flag. Please also note that '
-    'this flag is subject to --verbosity and requires logfile '
-    'not be stderr.', allow_hide_cpp=True))
-flags.DEFINE_boolean('showprefixforinfo', True,
-                     'If False, do not prepend prefix to info messages '
-                     'when it\'s logged to stderr, '
-                     '--verbosity is set to INFO level, '
-                     'and python logging is used.')
+        'logger_levels',
+        {},
+        (
+            'Specify log level of loggers. The format is a CSV list of '
+            '`name:level`. Where `name` is the logger name used with '
+            '`logging.getLogger()`, and `level` is a level name  (INFO, DEBUG, '
+            'etc). e.g. `myapp.foo:INFO,other.logger:DEBUG`'
+        ),
+    )
+)
+STDERRTHRESHOLD = flags.DEFINE_flag(
+    _StderrthresholdFlag(
+        'stderrthreshold',
+        'fatal',
+        (
+            'log messages at this level, or more severe, to stderr in '
+            'addition to the logfile.  Possible values are '
+            "'debug', 'info', 'warning', 'error', and 'fatal'.  "
+            'Obsoletes --alsologtostderr. Using --alsologtostderr '
+            'cancels the effect of this flag. Please also note that '
+            'this flag is subject to --verbosity and requires logfile '
+            'not be stderr.'
+        ),
+        allow_hide_cpp=True,
+    )
+)
+SHOWPREFIXFORINFO = flags.DEFINE_boolean(
+    'showprefixforinfo',
+    True,
+    (
+        'If False, do not prepend prefix to info messages '
+        "when it's logged to stderr, "
+        '--verbosity is set to INFO level, '
+        'and python logging is used.'
+    ),
+)
 
 
 def get_verbosity():
@@ -414,9 +444,32 @@ def debug(msg, *args, **kwargs):
   log(DEBUG, msg, *args, **kwargs)
 
 
-def exception(msg, *args, **kwargs):
+def exception(msg, *args, exc_info=True, **kwargs):
   """Logs an exception, with traceback and message."""
-  error(msg, *args, **kwargs, exc_info=True)
+  error(msg, *args, exc_info=exc_info, **kwargs)
+
+
+def _fast_stack_trace():
+  """A fast stack trace that gets us the minimal information we need.
+
+  Compared to using `get_absl_logger().findCaller(stack_info=True)`, this
+  function is ~100x faster.
+
+  Returns:
+    A tuple of tuples of (filename, line_number, last_instruction_offset).
+  """
+  cur_stack = inspect.currentframe()
+  if cur_stack is None or cur_stack.f_back is None:
+    return tuple()
+  # We drop the first frame, which is this function itself.
+  cur_stack = cur_stack.f_back
+  call_stack = []
+  while cur_stack.f_back:
+    cur_stack = cur_stack.f_back
+    call_stack.append(
+        (cur_stack.f_code.co_filename, cur_stack.f_lineno, cur_stack.f_lasti)
+    )
+  return tuple(call_stack)
 
 
 # Counter to keep track of number of log entries per token.
@@ -438,7 +491,7 @@ def _get_next_log_count_per_token(token):
   return next(_log_counter_per_token.setdefault(token, itertools.count()))
 
 
-def log_every_n(level, msg, n, *args):
+def log_every_n(level, msg, n, *args, use_call_stack=False):
   """Logs ``msg % args`` at level 'level' once per 'n' times.
 
   Logs the 1st call, (N+1)st call, (2N+1)st call,  etc.
@@ -449,8 +502,14 @@ def log_every_n(level, msg, n, *args):
     msg: str, the message to be logged.
     n: int, the number of times this should be called before it is logged.
     *args: The args to be substituted into the msg.
+    use_call_stack: bool, whether to include the call stack when counting the
+      number of times the message is logged.
   """
-  count = _get_next_log_count_per_token(get_absl_logger().findCaller())
+  caller_info = get_absl_logger().findCaller()
+  if use_call_stack:
+    # To reduce storage costs, we hash the call stack.
+    caller_info = (*caller_info[0:3], hash(_fast_stack_trace()))
+  count = _get_next_log_count_per_token(caller_info)
   log_if(level, msg, not (count % n), *args)
 
 
@@ -485,7 +544,7 @@ def _seconds_have_elapsed(token, num_seconds):
     return False
 
 
-def log_every_n_seconds(level, msg, n_seconds, *args):
+def log_every_n_seconds(level, msg, n_seconds, *args, use_call_stack=False):
   """Logs ``msg % args`` at level ``level`` iff ``n_seconds`` elapsed since last call.
 
   Logs the first call, logs subsequent calls if 'n' seconds have elapsed since
@@ -496,12 +555,18 @@ def log_every_n_seconds(level, msg, n_seconds, *args):
     msg: str, the message to be logged.
     n_seconds: float or int, seconds which should elapse before logging again.
     *args: The args to be substituted into the msg.
+    use_call_stack: bool, whether to include the call stack when counting the
+      number of times the message is logged.
   """
-  should_log = _seconds_have_elapsed(get_absl_logger().findCaller(), n_seconds)
+  caller_info = get_absl_logger().findCaller()
+  if use_call_stack:
+    # To reduce storage costs, we hash the call stack.
+    caller_info = (*caller_info[0:3], hash(_fast_stack_trace()))
+  should_log = _seconds_have_elapsed(caller_info, n_seconds)
   log_if(level, msg, should_log, *args)
 
 
-def log_first_n(level, msg, n, *args):
+def log_first_n(level, msg, n, *args, use_call_stack=False):
   """Logs ``msg % args`` at level ``level`` only first ``n`` times.
 
   Not threadsafe.
@@ -511,8 +576,14 @@ def log_first_n(level, msg, n, *args):
     msg: str, the message to be logged.
     n: int, the maximal number of times the message is logged.
     *args: The args to be substituted into the msg.
+    use_call_stack: bool, whether to include the call stack when counting the
+      number of times the message is logged.
   """
-  count = _get_next_log_count_per_token(get_absl_logger().findCaller())
+  caller_info = get_absl_logger().findCaller()
+  if use_call_stack:
+    # To reduce storage costs, we hash the call stack.
+    caller_info = (*caller_info[0:3], hash(_fast_stack_trace()))
+  count = _get_next_log_count_per_token(caller_info)
   log_if(level, msg, count < n, *args)
 
 
@@ -637,7 +708,7 @@ def get_log_file_name(level=INFO):
     ValueError: Raised when `level` has an invalid value.
   """
   if level not in converter.ABSL_LEVELS:
-    raise ValueError('Invalid absl.logging level {}'.format(level))
+    raise ValueError(f'Invalid absl.logging level {level}')
   stream = get_absl_handler().python_handler.stream
   if (stream == sys.stderr or stream == sys.stdout or
       not hasattr(stream, 'name')):
@@ -819,7 +890,7 @@ class PythonHandler(logging.StreamHandler):
   """The handler class used by Abseil Python logging implementation."""
 
   def __init__(self, stream=None, formatter=None):
-    super(PythonHandler, self).__init__(stream)
+    super().__init__(stream)
     self.setFormatter(formatter or PythonFormatter())
 
   def start_logging_to_file(self, program_name=None, log_dir=None):
@@ -845,7 +916,7 @@ class PythonHandler(logging.StreamHandler):
         if os.path.islink(symlink):
           os.unlink(symlink)
         os.symlink(os.path.basename(filename), symlink)
-      except EnvironmentError:
+      except OSError:
         # If it fails, we're sad but it's no error.  Commonly, this
         # fails because the symlink was created by another user and so
         # we can't modify it
@@ -864,7 +935,7 @@ class PythonHandler(logging.StreamHandler):
     try:
       if self.stream and hasattr(self.stream, 'flush'):
         self.stream.flush()
-    except (EnvironmentError, ValueError):
+    except (OSError, ValueError):
       # A ValueError is thrown if we try to flush a closed file.
       pass
     finally:
@@ -884,7 +955,7 @@ class PythonHandler(logging.StreamHandler):
     old_stream = self.stream
     self.stream = sys.stderr
     try:
-      super(PythonHandler, self).emit(record)
+      super().emit(record)
     finally:
       self.stream = old_stream
 
@@ -916,7 +987,7 @@ class PythonHandler(logging.StreamHandler):
     elif FLAGS['logtostderr'].value:
       self._log_to_stderr(record)
     else:
-      super(PythonHandler, self).emit(record)
+      super().emit(record)
       stderr_threshold = converter.string_to_standard(
           FLAGS['stderrthreshold'].value)
       if ((FLAGS['alsologtostderr'].value or level >= stderr_threshold) and
@@ -946,7 +1017,7 @@ class PythonHandler(logging.StreamHandler):
       except ValueError:
         # A ValueError is thrown if we try to run isatty() on a closed file.
         pass
-      super(PythonHandler, self).close()
+      super().close()
     finally:
       self.release()
 
@@ -955,7 +1026,7 @@ class ABSLHandler(logging.Handler):
   """Abseil Python logging module's log handler."""
 
   def __init__(self, python_logging_formatter):
-    super(ABSLHandler, self).__init__()
+    super().__init__()
 
     self._python_handler = PythonHandler(formatter=python_logging_formatter)
     self.activate_python_handler()
@@ -973,7 +1044,7 @@ class ABSLHandler(logging.Handler):
     self._current_handler.flush()
 
   def close(self):
-    super(ABSLHandler, self).close()
+    super().close()
     self._current_handler.close()
 
   def handle(self, record):
@@ -1016,7 +1087,7 @@ class PythonFormatter(logging.Formatter):
       prefix = ''
     else:
       prefix = get_absl_log_prefix(record)
-    return prefix + super(PythonFormatter, self).format(record)
+    return prefix + super().format(record)
 
 
 class ABSLLogger(logging.getLoggerClass()):
@@ -1047,10 +1118,11 @@ class ABSLLogger(logging.getLoggerClass()):
 
     Args:
       stack_info: bool, when True, include the stack trace as a fourth item
-          returned.  On Python 3 there are always four items returned - the
-          fourth will be None when this is False.  On Python 2 the stdlib
-          base class API only returns three items.  We do the same when this
-          new parameter is unspecified or False for compatibility.
+        returned.  On Python 3 there are always four items returned - the fourth
+        will be None when this is False.  On Python 2 the stdlib base class API
+        only returns three items.  We do the same when this new parameter is
+        unspecified or False for compatibility.
+      stacklevel: int, if greater than 1, that number of frames will be skipped.
 
     Returns:
       (filename, lineno, methodname[, sinfo]) of the calling method.
@@ -1059,6 +1131,7 @@ class ABSLLogger(logging.getLoggerClass()):
     # Use sys._getframe(2) instead of logging.currentframe(), it's slightly
     # faster because there is one less frame to traverse.
     frame = sys._getframe(2)  # pylint: disable=protected-access
+    frame_to_return = None
 
     while frame:
       code = frame.f_code
@@ -1066,14 +1139,27 @@ class ABSLLogger(logging.getLoggerClass()):
           (code.co_filename, code.co_name,
            code.co_firstlineno) not in f_to_skip and
           (code.co_filename, code.co_name) not in f_to_skip):
-        sinfo = None
-        if stack_info:
-          out = io.StringIO()
-          out.write(u'Stack (most recent call last):\n')
-          traceback.print_stack(frame, file=out)
-          sinfo = out.getvalue().rstrip(u'\n')
-        return (code.co_filename, frame.f_lineno, code.co_name, sinfo)
+        frame_to_return = frame
+        stacklevel -= 1
+        if stacklevel <= 0:
+          break
       frame = frame.f_back
+
+    if frame_to_return is not None:
+      sinfo = None
+      if stack_info:
+        out = io.StringIO()
+        out.write('Stack (most recent call last):\n')
+        traceback.print_stack(frame, file=out)
+        sinfo = out.getvalue().rstrip('\n')
+      return (
+          frame_to_return.f_code.co_filename,
+          frame_to_return.f_lineno,
+          frame_to_return.f_code.co_name,
+          sinfo,
+      )
+
+    return None
 
   def critical(self, msg, *args, **kwargs):
     """Logs ``msg % args`` with severity ``CRITICAL``."""
@@ -1122,7 +1208,7 @@ class ABSLLogger(logging.getLoggerClass()):
       # treat CRITICAL/FATAL logs as really FATAL.
       extra = kwargs.setdefault('extra', {})
       extra[_ABSL_LOG_FATAL] = True
-    super(ABSLLogger, self).log(level, msg, *args, **kwargs)
+    super().log(level, msg, *args, **kwargs)
 
   def handle(self, record):
     """Calls handlers without checking ``Logger.disabled``.

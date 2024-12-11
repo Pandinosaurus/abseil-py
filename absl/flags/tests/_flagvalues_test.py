@@ -323,7 +323,7 @@ class FlagValuesTest(absltest.TestCase):
       _defines.DEFINE_boolean('', 0, '')
 
     with self.assertRaises(_exceptions.Error):
-      _defines.DEFINE_boolean(1, 0, '')
+      _defines.DEFINE_boolean(1, 0, '')  # type: ignore
 
   def test_len(self):
     fv = _flagvalues.FlagValues()
@@ -511,11 +511,9 @@ absl.flags.tests.module_foo:
   def test_invalid_argv(self):
     fv = _flagvalues.FlagValues()
     with self.assertRaises(TypeError):
-      fv('./program')
+      fv('./program')  # type: ignore
     with self.assertRaises(TypeError):
-      fv(b'./program')
-    with self.assertRaises(TypeError):
-      fv(u'./program')
+      fv(b'./program')  # type: ignore
 
   def test_flags_dir(self):
     flag_values = _flagvalues.FlagValues()
@@ -634,7 +632,7 @@ class FlagSubstrMatchingTests(parameterized.TestCase):
 class SettingUnknownFlagTest(absltest.TestCase):
 
   def setUp(self):
-    super(SettingUnknownFlagTest, self).setUp()
+    super().setUp()
     self.setter_called = 0
 
   def set_undef(self, unused_name, unused_val):
@@ -677,7 +675,7 @@ class SettingUnknownFlagTest(absltest.TestCase):
 class SetAttributesTest(absltest.TestCase):
 
   def setUp(self):
-    super(SetAttributesTest, self).setUp()
+    super().setUp()
     self.new_flags = _flagvalues.FlagValues()
     _defines.DEFINE_boolean(
         'defined_flag', None, '', flag_values=self.new_flags)
@@ -706,7 +704,7 @@ class SetAttributesTest(absltest.TestCase):
 class FlagsDashSyntaxTest(absltest.TestCase):
 
   def setUp(self):
-    super(FlagsDashSyntaxTest, self).setUp()
+    super().setUp()
     self.fv = _flagvalues.FlagValues()
     _defines.DEFINE_string(
         'long_name', 'default', 'help', flag_values=self.fv, short_name='s')
@@ -866,7 +864,7 @@ class UnparsedFlagAccessTest(absltest.TestCase):
 class FlagHolderTest(absltest.TestCase):
 
   def setUp(self):
-    super(FlagHolderTest, self).setUp()
+    super().setUp()
     self.fv = _flagvalues.FlagValues()
     self.name_flag = _defines.DEFINE_string(
         'name', 'default', 'help', flag_values=self.fv)
@@ -900,6 +898,10 @@ class FlagHolderTest(absltest.TestCase):
   def test_present_returns_true_if_explicitly_set(self):
     self.parse_flags('--name=new_value')
     self.assertTrue(self.name_flag.present)
+
+  def test_serializes_flag(self):
+    self.parse_flags('--name=new_value')
+    self.assertEqual('--name=new_value', self.name_flag.serialize())
 
   def test_allow_override(self):
     first = _defines.DEFINE_integer(

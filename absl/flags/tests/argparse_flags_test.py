@@ -179,8 +179,11 @@ class ArgparseFlagsTest(parameterized.TestCase):
     parser.add_argument('--header', help='Header message to print.')
     subparsers = parser.add_subparsers(help='The command to execute.')
 
-    sub_parser = subparsers.add_parser(
-        'sub_cmd', help='Sub command.', inherited_absl_flags=self._absl_flags)
+    # NOTE: The sub parsers don't work well with typing hence `type: ignore`.
+    # See https://github.com/python/typeshed/issues/10082.
+    sub_parser = subparsers.add_parser(  # type: ignore
+        'sub_cmd', help='Sub command.', inherited_absl_flags=self._absl_flags
+    )
     sub_parser.add_argument('--sub_flag', help='Sub command flag.')
 
     def sub_command_func():
@@ -203,11 +206,15 @@ class ArgparseFlagsTest(parameterized.TestCase):
         inherited_absl_flags=self._absl_flags)
     subparsers = parser.add_subparsers(help='The command to execute.')
 
-    subparsers.add_parser(
-        'sub_cmd', help='Sub command.',
+    # NOTE: The sub parsers don't work well with typing hence `type: ignore`.
+    # See https://github.com/python/typeshed/issues/10082.
+    subparsers.add_parser(  # type: ignore
+        'sub_cmd',
+        help='Sub command.',
         # Do not inherit absl flags in the subparser.
         # This is the behavior that this test exercises.
-        inherited_absl_flags=None)
+        inherited_absl_flags=None,
+    )
 
     with self.assertRaises(SystemExit):
       parser.parse_args(['sub_cmd', '--absl_string=new_value'])
@@ -220,7 +227,10 @@ class ArgparseFlagsTest(parameterized.TestCase):
     # Only the short name is shown in the usage string.
     self.assertIn('[-s ABSL_STRING]', help_message)
     # Both names are included in the options section.
-    self.assertIn('-s ABSL_STRING, --absl_string ABSL_STRING', help_message)
+    if sys.version_info >= (3, 13):
+      self.assertIn(' -s, --absl_string ABSL_STRING', help_message)
+    else:
+      self.assertIn(' -s ABSL_STRING, --absl_string ABSL_STRING', help_message)
     # Verify help messages.
     self.assertIn('help for --absl_string=%.', help_message)
     self.assertIn('<apple|orange>: help for --absl_enum.', help_message)
@@ -270,10 +280,10 @@ class ArgparseFlagsTest(parameterized.TestCase):
   def test_no_help_flags(self, args):
     parser = argparse_flags.ArgumentParser(
         inherited_absl_flags=self._absl_flags, add_help=False)
-    with mock.patch.object(parser, 'print_help'):
+    with mock.patch.object(parser, 'print_help') as print_help_mock:
       with self.assertRaises(SystemExit):
         parser.parse_args(args)
-      parser.print_help.assert_not_called()
+    print_help_mock.assert_not_called()
 
   def test_helpfull_message(self):
     flags.DEFINE_string(
@@ -399,6 +409,21 @@ class ArgparseFlagsTest(parameterized.TestCase):
     args = parser.parse_args([])
     self.assertEqual(args.magic_number, 23)
 
+  def test_empty_inherited_absl_flags(self):
+    parser = argparse_flags.ArgumentParser(
+        inherited_absl_flags=flags.FlagValues()
+    )
+    parser.add_argument('--foo')
+    flagfile = self.create_tempfile(content='--foo=bar').full_path
+    # Make sure these flags are still available when inheriting an empty
+    # FlagValues instance.
+    ns = parser.parse_args([
+        '--undefok=undefined_flag',
+        '--undefined_flag=value',
+        '--flagfile=' + flagfile,
+    ])
+    self.assertEqual(ns.foo, 'bar')
+
 
 class ArgparseWithAppRunTest(parameterized.TestCase):
 
@@ -426,8 +451,7 @@ class ArgparseWithAppRunTest(parameterized.TestCase):
     helper = _bazelize_command.get_executable_path(
         'absl/flags/tests/argparse_flags_test_helper')
     try:
-      stdout = subprocess.check_output(
-          [helper] + args, env=env, universal_newlines=True)
+      stdout = subprocess.check_output([helper] + args, env=env, text=True)
     except subprocess.CalledProcessError as e:
       error_info = ('ERROR: argparse_helper failed\n'
                     'Command: {}\n'

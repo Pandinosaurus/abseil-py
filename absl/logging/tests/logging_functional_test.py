@@ -60,6 +60,18 @@ I1231 23:59:59.000000 12345 logging_functional_test_helper.py:76] Info first 1 o
 I1231 23:59:59.000000 12345 logging_functional_test_helper.py:77] Info 1 (every 3)
 I1231 23:59:59.000000 12345 logging_functional_test_helper.py:76] Info first 2 of 2
 I1231 23:59:59.000000 12345 logging_functional_test_helper.py:77] Info 4 (every 3)
+I1231 23:59:59.000000 12345 logging_functional_test_helper.py:123] Callstack aware info first 1 of 2
+I1231 23:59:59.000000 12345 logging_functional_test_helper.py:123] Callstack aware info 1 (every 3)
+I1231 23:59:59.000000 12345 logging_functional_test_helper.py:123] Callstack aware info first 2 of 2
+I1231 23:59:59.000000 12345 logging_functional_test_helper.py:123] Callstack aware info 4 (every 3)
+I1231 23:59:59.000000 12345 logging_functional_test_helper.py:123] Callstack aware info first 1 of 2
+I1231 23:59:59.000000 12345 logging_functional_test_helper.py:123] Callstack aware info 1 (every 3)
+I1231 23:59:59.000000 12345 logging_functional_test_helper.py:123] Callstack aware info first 2 of 2
+I1231 23:59:59.000000 12345 logging_functional_test_helper.py:123] Callstack aware info 4 (every 3)
+I1231 23:59:59.000000 12345 logging_functional_test_helper.py:123] Callstack aware info first 1 of 2
+I1231 23:59:59.000000 12345 logging_functional_test_helper.py:123] Callstack aware info 1 (every 3)
+I1231 23:59:59.000000 12345 logging_functional_test_helper.py:123] Callstack aware info first 2 of 2
+I1231 23:59:59.000000 12345 logging_functional_test_helper.py:123] Callstack aware info 4 (every 3)
 """
 
 _PY_INFO_LOG_MESSAGE_NOPREFIX = """\
@@ -77,6 +89,18 @@ Info first 1 of 2
 Info 1 (every 3)
 Info first 2 of 2
 Info 4 (every 3)
+Callstack aware info first 1 of 2
+Callstack aware info 1 (every 3)
+Callstack aware info first 2 of 2
+Callstack aware info 4 (every 3)
+Callstack aware info first 1 of 2
+Callstack aware info 1 (every 3)
+Callstack aware info first 2 of 2
+Callstack aware info 4 (every 3)
+Callstack aware info first 1 of 2
+Callstack aware info 1 (every 3)
+Callstack aware info first 2 of 2
+Callstack aware info 4 (every 3)
 """
 
 _PY_WARNING_LOG_MESSAGE = """\
@@ -88,15 +112,6 @@ W0000 23:59:59.000000 12345 logging_functional_test_helper.py:82] Warn 1 (every 
 W0000 23:59:59.000000 12345 logging_functional_test_helper.py:81] Warn first 2 of 2
 W0000 23:59:59.000000 12345 logging_functional_test_helper.py:82] Warn 4 (every 3)
 """
-
-if sys.version_info[0:2] == (3, 4):
-  _FAKE_ERROR_EXTRA_MESSAGE = """\
-Traceback (most recent call last):
-  File "logging_functional_test_helper.py", line 456, in _test_do_logging
-    raise OSError('Fake Error')
-"""
-else:
-  _FAKE_ERROR_EXTRA_MESSAGE = ''
 
 _PY_ERROR_LOG_MESSAGE = """\
 E1231 23:59:59.000000 12345 logging_functional_test_helper.py:65] This line is VLOG level -2
@@ -123,13 +138,13 @@ Traceback (most recent call last):
     raise OSError('Fake Error')
 OSError: Fake Error
 E0000 00:00:00.000000 12345 logging_functional_test_helper.py:123] No traceback
-{fake_error_extra}OSError: Fake Error
+OSError: Fake Error
 E1231 23:59:59.000000 12345 logging_functional_test_helper.py:90] Alarming Stuff
 E0000 23:59:59.000000 12345 logging_functional_test_helper.py:92] Error first 1 of 2
 E0000 23:59:59.000000 12345 logging_functional_test_helper.py:93] Error 1 (every 3)
 E0000 23:59:59.000000 12345 logging_functional_test_helper.py:92] Error first 2 of 2
 E0000 23:59:59.000000 12345 logging_functional_test_helper.py:93] Error 4 (every 3)
-""".format(fake_error_extra=_FAKE_ERROR_EXTRA_MESSAGE)
+"""
 
 
 _CRITICAL_DOWNGRADE_TO_ERROR_MESSAGE = """\
@@ -310,12 +325,12 @@ class FunctionalTest(parameterized.TestCase):
     return expected_logs
 
   def setUp(self):
-    super(FunctionalTest, self).setUp()
+    super().setUp()
     self._log_dir = tempfile.mkdtemp(dir=absltest.TEST_TMPDIR.value)
 
   def tearDown(self):
     shutil.rmtree(self._log_dir)
-    super(FunctionalTest, self).tearDown()
+    super().tearDown()
 
   def _exec_test(self,
                  verify_exit_fn,
@@ -686,10 +701,11 @@ I0000 00:00:00.000000 12345 logging_functional_test_helper.py:123] None exc_info
 
     def get_stderr_message(stderr, name):
       match = re.search(
-          '-- begin {} --\n(.*)-- end {} --'.format(name, name),
-          stderr, re.MULTILINE | re.DOTALL)
-      self.assertTrue(
-          match, 'Cannot find stderr message for test {}'.format(name))
+          f'-- begin {name} --\n(.*)-- end {name} --',
+          stderr,
+          re.MULTILINE | re.DOTALL,
+      )
+      self.assertTrue(match, f'Cannot find stderr message for test {name}')
       return match.group(1)
 
     def assert_stderr(stderr):
@@ -710,7 +726,7 @@ I0000 00:00:00.000000 12345 logging_functional_test_helper.py:123] None exc_info
 
     expected_logs = [['stderr', None, assert_stderr]]
 
-    info_log = u'''\
+    info_log = """\
 I0000 00:00:00.000000 12345 logging_functional_test_helper.py:123] G\u00eete: Ch\u00e2tonnaye
 I0000 00:00:00.000000 12345 logging_functional_test_helper.py:123] G\u00eete: Ch\u00e2tonnaye
 I0000 00:00:00.000000 12345 logging_functional_test_helper.py:123] b'G\\xc3\\xaete: b'Ch\\xc3\\xa2tonnaye''
@@ -718,7 +734,7 @@ I0000 00:00:00.000000 12345 logging_functional_test_helper.py:123] G\u00eete: b'
 I0000 00:00:00.000000 12345 logging_functional_test_helper.py:123] b'G\\xc3\\xaete: Ch\u00e2tonnaye'
 I0000 00:00:00.000000 12345 logging_functional_test_helper.py:123] G\u00eete: b'Ch\\xe2tonnaye'
 I0000 00:00:00.000000 12345 logging_functional_test_helper.py:123] exception: Ch\u00e2tonnaye
-'''
+"""
     expected_logs.append(['absl_log_file', 'INFO', info_log])
 
     self._exec_test(

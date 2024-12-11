@@ -30,7 +30,7 @@ from absl import logging
 FLAGS = flags.FLAGS
 
 
-class VerboseDel(object):
+class VerboseDel:
   """Dummy class to test __del__ running."""
 
   def __init__(self, msg):
@@ -71,6 +71,27 @@ def _test_do_logging():
     logging.log_first_n(logging.INFO, 'Info first %d of %d', 2, i, 2)
     logging.log_every_n(logging.INFO, 'Info %d (every %d)', 3, i, 3)
 
+  for i in range(1, 5):
+    logging.log_first_n(
+        logging.INFO,
+        'Callstack aware info first %d of %d',
+        2,
+        i,
+        2,
+        use_call_stack=True,
+    )
+    logging.log_every_n(
+        logging.INFO,
+        'Callstack aware info %d (every %d)',
+        3,
+        i,
+        3,
+        use_call_stack=True,
+    )
+  # We call this twice on the same line to make sure the call stack is
+  # distinguishing function calls on the same line.
+  _ = [_test_do_logging_subfunc(), _test_do_logging_subfunc()]
+
   logging.vlog(-1, 'This line is VLOG level -1')
   logging.log(-1, 'This line is log level -1')
   logging.warning('Worrying Stuff')
@@ -103,6 +124,26 @@ def _test_do_logging():
     logging.log_first_n(logging.ERROR, 'Error first %d of %d', 2, i, 2)
     logging.log_every_n(logging.ERROR, 'Error %d (every %d)', 3, i, 3)
   logging.flush()
+
+
+def _test_do_logging_subfunc():
+  for i in range(1, 5):
+    logging.log_first_n(
+        logging.INFO,
+        'Callstack aware info first %d of %d',
+        2,
+        i,
+        2,
+        use_call_stack=True,
+    )
+    logging.log_every_n(
+        logging.INFO,
+        'Callstack aware info %d (every %d)',
+        3,
+        i,
+        3,
+        use_call_stack=True,
+    )
 
 
 def _test_fatal_main_thread_only():
@@ -274,19 +315,21 @@ def _test_unicode():
 
     # Add line separators so that tests can verify the output for each log
     # message.
-    sys.stderr.write('-- begin {} --\n'.format(name))
+    sys.stderr.write(f'-- begin {name} --\n')
     logging.info(msg, *args)
-    sys.stderr.write('-- end {} --\n'.format(name))
+    sys.stderr.write(f'-- end {name} --\n')
 
-  log('unicode', u'G\u00eete: Ch\u00e2tonnaye')
-  log('unicode % unicode', u'G\u00eete: %s', u'Ch\u00e2tonnaye')
-  log('bytes % bytes', u'G\u00eete: %s'.encode('utf-8'),
-      u'Ch\u00e2tonnaye'.encode('utf-8'))
-  log('unicode % bytes', u'G\u00eete: %s', u'Ch\u00e2tonnaye'.encode('utf-8'))
-  log('bytes % unicode', u'G\u00eete: %s'.encode('utf-8'), u'Ch\u00e2tonnaye')
-  log('unicode % iso8859-15', u'G\u00eete: %s',
-      u'Ch\u00e2tonnaye'.encode('iso-8859-15'))
-  log('str % exception', 'exception: %s', Exception(u'Ch\u00e2tonnaye'))
+  log('unicode', 'G\u00eete: Ch\u00e2tonnaye')
+  log('unicode % unicode', 'G\u00eete: %s', 'Ch\u00e2tonnaye')
+  log('bytes % bytes', 'G\u00eete: %s'.encode(), 'Ch\u00e2tonnaye'.encode())
+  log('unicode % bytes', 'G\u00eete: %s', 'Ch\u00e2tonnaye'.encode())
+  log('bytes % unicode', 'G\u00eete: %s'.encode(), 'Ch\u00e2tonnaye')
+  log(
+      'unicode % iso8859-15',
+      'G\u00eete: %s',
+      'Ch\u00e2tonnaye'.encode('iso-8859-15'),
+  )
+  log('str % exception', 'exception: %s', Exception('Ch\u00e2tonnaye'))
 
 
 def main(argv):

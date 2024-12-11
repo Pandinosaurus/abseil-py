@@ -159,8 +159,8 @@ inside a tuple::
         self.assertEqual(0, sum(arg))
 
 
-Cartesian product of Parameter Values as Parametrized Test Cases
-================================================================
+Cartesian product of Parameter Values as Parameterized Test Cases
+=================================================================
 
 If required to test method over a cartesian product of parameters,
 `parameterized.product` may be used to facilitate generation of parameters
@@ -217,6 +217,7 @@ import itertools
 import re
 import types
 import unittest
+import warnings
 
 from absl.testing import absltest
 
@@ -235,12 +236,14 @@ class DuplicateTestNameError(Exception):
   """Raised when a parameterized test has the same test name multiple times."""
 
   def __init__(self, test_class_name, new_test_name, original_test_name):
-    super(DuplicateTestNameError, self).__init__(
+    super().__init__(
         'Duplicate parameterized test name in {}: generated test name {!r} '
         '(generated from {!r}) already exists. Consider using '
         'named_parameters() to give your tests unique names and/or renaming '
         'the conflicting test method.'.format(
-            test_class_name, new_test_name, original_test_name))
+            test_class_name, new_test_name, original_test_name
+        )
+    )
 
 
 def _clean_repr(obj):
@@ -269,7 +272,7 @@ def _async_wrapped(func):
   return wrapper
 
 
-class _ParameterizedTestIter(object):
+class _ParameterizedTestIter:
   """Callable and iterable class for producing new test cases."""
 
   def __init__(self, test_method, testcases, naming_type, original_name=None):
@@ -662,20 +665,20 @@ class TestCase(absltest.TestCase, metaclass=TestGeneratorMetaclass):
     Returns:
       The test id.
     """
-    base = super(TestCase, self).id()
+    base = super().id()
     params_repr = self._get_params_repr()
     if params_repr:
       # We include the params in the id so that, when reported in the
       # test.xml file, the value is more informative than just "test_foo0".
       # Use a space to separate them so that it's copy/paste friendly and
       # easy to identify the actual test id.
-      return '{} {}'.format(base, params_repr)
+      return f'{base} {params_repr}'
     else:
       return base
 
 
 # This function is kept CamelCase because it's used as a class's base class.
-def CoopTestCase(other_base_class):  # pylint: disable=invalid-name
+def CoopTestCase(other_base_class) -> type:  # pylint: disable=invalid-name, g-bare-generic
   """Returns a new base class with a cooperative metaclass base.
 
   This enables the TestCase to be used in combination
@@ -697,10 +700,27 @@ def CoopTestCase(other_base_class):  # pylint: disable=invalid-name
   Returns:
     A new class object.
   """
-  metaclass = type(
-      'CoopMetaclass',
-      (other_base_class.__metaclass__,
-       TestGeneratorMetaclass), {})
-  return metaclass(
-      'CoopTestCase',
-      (other_base_class, TestCase), {})
+  # If the other base class has a metaclass of 'type' then trying to combine
+  # the metaclasses will result in an MRO error. So simply combine them and
+  # return.
+  if type(other_base_class) == type:  # pylint: disable=unidiomatic-typecheck
+    warnings.warn(
+        'CoopTestCase is only necessary when combining with a class that uses'
+        ' a metaclass. Use multiple inheritance like this instead: class'
+        f' ExampleTest(paramaterized.TestCase, {other_base_class.__name__}):',
+        stacklevel=2,
+    )
+
+    class CoopTestCaseBase(other_base_class, TestCase):
+      pass
+
+    return CoopTestCaseBase
+  else:
+
+    class CoopMetaclass(type(other_base_class), TestGeneratorMetaclass):  # type: ignore  # pylint: disable=unused-variable
+      pass
+
+    class CoopTestCaseBase(other_base_class, TestCase, metaclass=CoopMetaclass):  # type: ignore
+      pass
+
+    return CoopTestCaseBase

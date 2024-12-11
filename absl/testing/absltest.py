@@ -19,10 +19,13 @@ tests.
 """
 
 from collections import abc
+import collections
 import contextlib
+import dataclasses
 import difflib
 import enum
 import errno
+import faulthandler
 import getpass
 import inspect
 import io
@@ -39,45 +42,18 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import typing
+from typing import Any, AnyStr, BinaryIO, Callable, ContextManager, IO, Iterator, List, Mapping, MutableMapping, MutableSequence, NoReturn, Optional, Sequence, TextIO, Tuple, Type, Union
 import unittest
 from unittest import mock  # pylint: disable=unused-import Allow absltest.mock.
+import unittest.case
 from urllib import parse
 
-try:
-  # The faulthandler module isn't always available, and pytype doesn't
-  # understand that we're catching ImportError, so suppress the error.
-  # pytype: disable=import-error
-  import faulthandler
-  # pytype: enable=import-error
-except ImportError:
-  # We use faulthandler if it is available.
-  faulthandler = None
-
-from absl import app
+from absl import app  # pylint: disable=g-import-not-at-top
 from absl import flags
 from absl import logging
 from absl.testing import _pretty_print_reporter
 from absl.testing import xml_reporter
-
-# Make typing an optional import to avoid it being a required dependency
-# in Python 2. Type checkers will still understand the imports.
-try:
-  # pylint: disable=unused-import
-  import typing
-  from typing import Any, AnyStr, BinaryIO, Callable, ContextManager, IO, Iterator, List, Mapping, MutableMapping, MutableSequence, Optional, Sequence, Text, TextIO, Tuple, Type, Union
-  # pylint: enable=unused-import
-except ImportError:
-  pass
-else:
-  # Use an if-type-checking block to prevent leakage of type-checking only
-  # symbols. We don't want people relying on these at runtime.
-  if typing.TYPE_CHECKING:
-    # Unbounded TypeVar for general usage
-    _T = typing.TypeVar('_T')
-
-    import unittest.case
-    _OutcomeType = unittest.case._Outcome  # pytype: disable=module-attr
-
 
 
 # Re-export a bunch of unittest functions we support so that people don't
@@ -94,6 +70,8 @@ expectedFailure = unittest.expectedFailure
 
 FLAGS = flags.FLAGS
 
+# Private typing symbols.
+_T = typing.TypeVar('_T')  # Unbounded TypeVar for general usage
 _TEXT_OR_BINARY_TYPES = (str, bytes)
 
 # Suppress surplus entries in AssertionError stack traces.
@@ -111,7 +89,8 @@ def expectedFailureIf(condition, reason):  # pylint: disable=invalid-name
 
   Args:
     condition: bool, whether to expect failure or not.
-    reason: Text, the reason to expect failure.
+    reason: str, the reason to expect failure.
+
   Returns:
     Decorator function
   """
@@ -139,8 +118,7 @@ class TempFileCleanup(enum.Enum):
 # pylint: disable=invalid-name
 
 
-def _get_default_test_random_seed():
-  # type: () -> int
+def _get_default_test_random_seed() -> int:
   random_seed = 301
   value = os.environ.get('TEST_RANDOM_SEED', '')
   try:
@@ -150,14 +128,12 @@ def _get_default_test_random_seed():
   return random_seed
 
 
-def get_default_test_srcdir():
-  # type: () -> Text
+def get_default_test_srcdir() -> str:
   """Returns default test source dir."""
   return os.environ.get('TEST_SRCDIR', '')
 
 
-def get_default_test_tmpdir():
-  # type: () -> Text
+def get_default_test_tmpdir() -> str:
   """Returns default test temp dir."""
   tmpdir = os.environ.get('TEST_TMPDIR', '')
   if not tmpdir:
@@ -166,8 +142,7 @@ def get_default_test_tmpdir():
   return tmpdir
 
 
-def _get_default_randomize_ordering_seed():
-  # type: () -> int
+def _get_default_randomize_ordering_seed() -> int:
   """Returns default seed to use for randomizing test order.
 
   This function first checks the --test_randomize_ordering_seed flag, and then
@@ -212,8 +187,7 @@ def _get_default_randomize_ordering_seed():
       return seed
   except ValueError:
     pass
-  raise ValueError(
-      'Unknown test randomization seed value: {}'.format(randomize))
+  raise ValueError(f'Unknown test randomization seed value: {randomize}')
 
 
 TEST_SRCDIR = flags.DEFINE_string(
@@ -249,12 +223,10 @@ flags.DEFINE_string('xml_output_file', '', 'File to store XML test results')
 # We might need to monkey-patch TestResult so that it stops considering an
 # unexpected pass as a as a "successful result".  For details, see
 # http://bugs.python.org/issue20165
-def _monkey_patch_test_result_for_unexpected_passes():
-  # type: () -> None
+def _monkey_patch_test_result_for_unexpected_passes() -> None:
   """Workaround for <http://bugs.python.org/issue20165>."""
 
-  def wasSuccessful(self):
-    # type: () -> bool
+  def wasSuccessful(self) -> bool:
     """Tells whether or not this result was a success.
 
     Any unexpected pass is to be counted as a non-success.
@@ -271,7 +243,7 @@ def _monkey_patch_test_result_for_unexpected_passes():
   test_result = unittest.TestResult()
   test_result.addUnexpectedSuccess(unittest.FunctionTestCase(lambda: None))
   if test_result.wasSuccessful():  # The bug is present.
-    unittest.TestResult.wasSuccessful = wasSuccessful
+    unittest.TestResult.wasSuccessful = wasSuccessful  # type: ignore[method-assign]
     if test_result.wasSuccessful():  # Warn the user if our hot-fix failed.
       sys.stderr.write('unittest.result.TestResult monkey patch to report'
                        ' unexpected passes as failures did not work.\n')
@@ -280,8 +252,9 @@ def _monkey_patch_test_result_for_unexpected_passes():
 _monkey_patch_test_result_for_unexpected_passes()
 
 
-def _open(filepath, mode, _open_func=open):
-  # type: (Text, Text, Callable[..., IO]) -> IO
+def _open(
+    filepath: str, mode: str, _open_func: Callable[..., IO[AnyStr]] = open
+) -> IO[AnyStr]:
   """Opens a file.
 
   Like open(), but ensure that we can open real files even if tests stub out
@@ -298,7 +271,7 @@ def _open(filepath, mode, _open_func=open):
   return _open_func(filepath, mode, encoding='utf-8')
 
 
-class _TempDir(object):
+class _TempDir:
   """Represents a temporary directory for tests.
 
   Creation of this class is internal. Using its public methods is OK.
@@ -308,29 +281,32 @@ class _TempDir(object):
   to e.g. `os.path.join()`.
   """
 
-  def __init__(self, path):
-    # type: (Text) -> None
+  def __init__(self, path: str) -> None:
     """Module-private: do not instantiate outside module."""
     self._path = path
 
   @property
-  def full_path(self):
-    # type: () -> Text
+  def full_path(self) -> str:
     """Returns the path, as a string, for the directory.
 
-    TIP: Instead of e.g. `os.path.join(temp_dir.full_path)`, you can simply
-    do `os.path.join(temp_dir)` because `__fspath__()` is implemented.
+    TIP: Instead of e.g. `os.path.join(temp_dir.full_path, some_file_name)`,
+    you can simply do `os.path.join(temp_dir, some_file_name)` because
+    `__fspath__()` is implemented.
     """
     return self._path
 
-  def __fspath__(self):
-    # type: () -> Text
+  def __fspath__(self) -> str:
     """See os.PathLike."""
     return self.full_path
 
-  def create_file(self, file_path=None, content=None, mode='w', encoding='utf8',
-                  errors='strict'):
-    # type: (Optional[Text], Optional[AnyStr], Text, Text, Text) -> _TempFile
+  def create_file(
+      self,
+      file_path: Optional[str] = None,
+      content: Optional[AnyStr] = None,
+      mode: str = 'w',
+      encoding: str = 'utf8',
+      errors: str = 'strict',
+  ) -> '_TempFile':
     """Create a file in the directory.
 
     NOTE: If the file already exists, it will be made writable and overwritten.
@@ -357,8 +333,7 @@ class _TempDir(object):
                               errors)
     return tf
 
-  def mkdir(self, dir_path=None):
-    # type: (Optional[Text]) -> _TempDir
+  def mkdir(self, dir_path: Optional[str] = None) -> '_TempDir':
     """Create a directory in the directory.
 
     Args:
@@ -379,7 +354,7 @@ class _TempDir(object):
     return _TempDir(path)
 
 
-class _TempFile(object):
+class _TempFile:
   """Represents a tempfile for tests.
 
   Creation of this class is internal. Using its public methods is OK.
@@ -389,16 +364,20 @@ class _TempFile(object):
   to e.g. `os.path.join()`.
   """
 
-  def __init__(self, path):
-    # type: (Text) -> None
+  def __init__(self, path: str) -> None:
     """Private: use _create instead."""
     self._path = path
 
-  # pylint: disable=line-too-long
   @classmethod
-  def _create(cls, base_path, file_path, content, mode, encoding, errors):
-    # type: (Text, Optional[Text], AnyStr, Text, Text, Text) -> Tuple[_TempFile, Text]
-    # pylint: enable=line-too-long
+  def _create(
+      cls,
+      base_path: str,
+      file_path: Optional[str],
+      content: Optional[AnyStr],
+      mode: str,
+      encoding: str,
+      errors: str,
+  ) -> Tuple['_TempFile', str]:
     """Module-private: create a tempfile instance."""
     if file_path:
       cleanup_path = os.path.join(base_path, _get_first_part(file_path))
@@ -429,34 +408,36 @@ class _TempFile(object):
     return tf, cleanup_path
 
   @property
-  def full_path(self):
-    # type: () -> Text
+  def full_path(self) -> str:
     """Returns the path, as a string, for the file.
 
-    TIP: Instead of e.g. `os.path.join(temp_file.full_path)`, you can simply
-    do `os.path.join(temp_file)` because `__fspath__()` is implemented.
+    TIP: Instead of e.g. `os.path.join(temp_file.full_path, some_file_name)`,
+    you can simply do `os.path.join(temp_file, some_file_name)` because
+    `__fspath__()` is implemented.
     """
     return self._path
 
-  def __fspath__(self):
-    # type: () -> Text
+  def __fspath__(self) -> str:
     """See os.PathLike."""
     return self.full_path
 
-  def read_text(self, encoding='utf8', errors='strict'):
-    # type: (Text, Text) -> Text
+  def read_text(self, encoding: str = 'utf8', errors: str = 'strict') -> str:
     """Return the contents of the file as text."""
     with self.open_text(encoding=encoding, errors=errors) as fp:
       return fp.read()
 
-  def read_bytes(self):
-    # type: () -> bytes
+  def read_bytes(self) -> bytes:
     """Return the content of the file as bytes."""
     with self.open_bytes() as fp:
       return fp.read()
 
-  def write_text(self, text, mode='w', encoding='utf8', errors='strict'):
-    # type: (Text, Text, Text, Text) -> None
+  def write_text(
+      self,
+      text: str,
+      mode: str = 'w',
+      encoding: str = 'utf8',
+      errors: str = 'strict',
+  ) -> None:
     """Write text to the file.
 
     Args:
@@ -470,8 +451,7 @@ class _TempFile(object):
     with self.open_text(mode, encoding=encoding, errors=errors) as fp:
       fp.write(text)
 
-  def write_bytes(self, data, mode='wb'):
-    # type: (bytes, Text) -> None
+  def write_bytes(self, data: bytes, mode: str = 'wb') -> None:
     """Write bytes to the file.
 
     Args:
@@ -482,8 +462,9 @@ class _TempFile(object):
     with self.open_bytes(mode) as fp:
       fp.write(data)
 
-  def open_text(self, mode='rt', encoding='utf8', errors='strict'):
-    # type: (Text, Text, Text) -> ContextManager[TextIO]
+  def open_text(
+      self, mode: str = 'rt', encoding: str = 'utf8', errors: str = 'strict'
+  ) -> ContextManager[TextIO]:
     """Return a context manager for opening the file in text mode.
 
     Args:
@@ -506,8 +487,7 @@ class _TempFile(object):
     cm = self._open(mode, encoding, errors)
     return cm
 
-  def open_bytes(self, mode='rb'):
-    # type: (Text) -> ContextManager[BinaryIO]
+  def open_bytes(self, mode: str = 'rb') -> ContextManager[BinaryIO]:
     """Return a context manager for opening the file in binary mode.
 
     Args:
@@ -538,12 +518,13 @@ class _TempFile(object):
       encoding: Optional[str] = 'utf8',
       errors: Optional[str] = 'strict',
   ) -> Iterator[Any]:
-    with io.open(
-        self.full_path, mode=mode, encoding=encoding, errors=errors) as fp:
+    with open(
+        self.full_path, mode=mode, encoding=encoding, errors=errors
+    ) as fp:
       yield fp
 
 
-class _method(object):
+class _method:
   """A decorator that supports both instance and classmethod invocations.
 
   Using similar semantics to the @property builtin, this decorator can augment
@@ -552,28 +533,32 @@ class _method(object):
   (e.g. Cls.method(self, ...)) but is still situationally useful.
   """
 
-  def __init__(self, finstancemethod):
-    # type: (Callable[..., Any]) -> None
+  _finstancemethod: Any
+  _fclassmethod: Optional[Any]
+
+  def __init__(self, finstancemethod: Callable[..., Any]) -> None:
     self._finstancemethod = finstancemethod
     self._fclassmethod = None
 
-  def classmethod(self, fclassmethod):
-    # type: (Callable[..., Any]) -> _method
-    self._fclassmethod = classmethod(fclassmethod)
+  def classmethod(self, fclassmethod: Callable[..., Any]) -> '_method':
+    if isinstance(fclassmethod, classmethod):
+      self._fclassmethod = fclassmethod
+    else:
+      self._fclassmethod = classmethod(fclassmethod)
     return self
 
-  def __doc__(self):
-    # type: () -> str
-    if getattr(self._finstancemethod, '__doc__'):
-      return self._finstancemethod.__doc__
-    elif getattr(self._fclassmethod, '__doc__'):
-      return self._fclassmethod.__doc__
-    return ''
+  def __doc__(self) -> str:  # type: ignore[override]
+    return (
+        getattr(self._finstancemethod, '__doc__')
+        or getattr(self._fclassmethod, '__doc__')
+        or ''
+    )
 
-  def __get__(self, obj, type_):
-    # type: (Optional[Any], Optional[Type[Any]]) -> Callable[..., Any]
+  def __get__(
+      self, obj: Optional[Any], type_: Optional[Type[Any]]
+  ) -> Callable[..., Any]:
     func = self._fclassmethod if obj is None else self._finstancemethod
-    return func.__get__(obj, type_)  # pytype: disable=attribute-error
+    return func.__get__(obj, type_)  # type: ignore[attribute-error, union-attr]
 
 
 class TestCase(unittest.TestCase):
@@ -585,9 +570,7 @@ class TestCase(unittest.TestCase):
   # tempfile module. This can be overridden at the class level, instance level,
   # or with the `cleanup` arg of `create_tempfile()` and `create_tempdir()`. See
   # `TempFileCleanup` for details on the different values.
-  # TODO(b/70517332): Remove the type comment and the disable once pytype has
-  # better support for enums.
-  tempfile_cleanup = TempFileCleanup.ALWAYS  # type: TempFileCleanup  # pytype: disable=annotation-type-mismatch
+  tempfile_cleanup: TempFileCleanup = TempFileCleanup.ALWAYS
 
   maxDiff = 80 * 20
   longMessage = True
@@ -597,13 +580,13 @@ class TestCase(unittest.TestCase):
     _exit_stack = None
     _cls_exit_stack = None
 
-  def __init__(self, *args, **kwargs):
-    super(TestCase, self).__init__(*args, **kwargs)
+  def __init__(self, *args, **kwargs) -> None:
+    super().__init__(*args, **kwargs)
     # This is to work around missing type stubs in unittest.pyi
-    self._outcome = getattr(self, '_outcome')  # type: Optional[_OutcomeType]
+    self._outcome: Optional[Any] = getattr(self, '_outcome')
 
   def setUp(self):
-    super(TestCase, self).setUp()
+    super().setUp()
     # NOTE: Only Python 3 contextlib has ExitStack and
     # Python 3.11+ already has enterContext.
     if hasattr(contextlib, 'ExitStack') and sys.version_info < (3, 11):
@@ -612,7 +595,7 @@ class TestCase(unittest.TestCase):
 
   @classmethod
   def setUpClass(cls):
-    super(TestCase, cls).setUpClass()
+    super().setUpClass()
     # NOTE: Only Python 3 contextlib has ExitStack, only Python 3.8+ has
     # addClassCleanup and Python 3.11+ already has enterClassContext.
     if (
@@ -623,8 +606,11 @@ class TestCase(unittest.TestCase):
       cls._cls_exit_stack = contextlib.ExitStack()
       cls.addClassCleanup(cls._cls_exit_stack.close)
 
-  def create_tempdir(self, name=None, cleanup=None):
-    # type: (Optional[Text], Optional[TempFileCleanup]) -> _TempDir
+  def create_tempdir(
+      self,
+      name: Optional[str] = None,
+      cleanup: Optional[TempFileCleanup] = None,
+  ) -> _TempDir:
     """Create a temporary directory specific to the test.
 
     NOTE: The directory and its contents will be recursively cleared before
@@ -677,11 +663,15 @@ class TestCase(unittest.TestCase):
 
     return _TempDir(path)
 
-  # pylint: disable=line-too-long
-  def create_tempfile(self, file_path=None, content=None, mode='w',
-                      encoding='utf8', errors='strict', cleanup=None):
-    # type: (Optional[Text], Optional[AnyStr], Text, Text, Text, Optional[TempFileCleanup]) -> _TempFile
-    # pylint: enable=line-too-long
+  def create_tempfile(
+      self,
+      file_path: Optional[str] = None,
+      content: Optional[AnyStr] = None,
+      mode: str = 'w',
+      encoding: str = 'utf8',
+      errors: str = 'strict',
+      cleanup: Optional[TempFileCleanup] = None,
+  ) -> _TempFile:
     """Create a temporary file specific to the test.
 
     This creates a named file on disk that is isolated to this test, and will
@@ -734,8 +724,7 @@ class TestCase(unittest.TestCase):
     return tf
 
   @_method
-  def enter_context(self, manager):
-    # type: (ContextManager[_T]) -> _T
+  def enter_context(self, manager: ContextManager[_T]) -> _T:
     """Returns the CM's value after registering it with the exit stack.
 
     Entering a context pushes it onto a stack of contexts. When `enter_context`
@@ -768,8 +757,8 @@ class TestCase(unittest.TestCase):
     return self._exit_stack.enter_context(manager)
 
   @enter_context.classmethod
-  def enter_context(cls, manager):  # pylint: disable=no-self-argument
-    # type: (ContextManager[_T]) -> _T
+  @classmethod
+  def _enter_context_cls(cls, manager: ContextManager[_T]) -> _T:
     if sys.version_info >= (3, 11):
       return cls.enterClassContext(manager)
 
@@ -780,23 +769,23 @@ class TestCase(unittest.TestCase):
     return cls._cls_exit_stack.enter_context(manager)
 
   @classmethod
-  def _get_tempdir_path_cls(cls):
-    # type: () -> Text
+  def _get_tempdir_path_cls(cls) -> str:
     return os.path.join(TEST_TMPDIR.value,
                         cls.__qualname__.replace('__main__.', ''))
 
-  def _get_tempdir_path_test(self):
-    # type: () -> Text
+  def _get_tempdir_path_test(self) -> str:
     return os.path.join(self._get_tempdir_path_cls(), self._testMethodName)
 
-  def _get_tempfile_cleanup(self, override):
-    # type: (Optional[TempFileCleanup]) -> TempFileCleanup
+  def _get_tempfile_cleanup(
+      self, override: Optional[TempFileCleanup]
+  ) -> TempFileCleanup:
     if override is not None:
       return override
     return self.tempfile_cleanup
 
-  def _maybe_add_temp_path_cleanup(self, path, cleanup):
-    # type: (Text, Optional[TempFileCleanup]) -> None
+  def _maybe_add_temp_path_cleanup(
+      self, path: str, cleanup: Optional[TempFileCleanup]
+  ) -> None:
     cleanup = self._get_tempfile_cleanup(cleanup)
     if cleanup == TempFileCleanup.OFF:
       return
@@ -805,7 +794,7 @@ class TestCase(unittest.TestCase):
     elif cleanup == TempFileCleanup.SUCCESS:
       self._internal_add_cleanup_on_success(_rmtree_ignore_errors, path)
     else:
-      raise AssertionError('Unexpected cleanup value: {}'.format(cleanup))
+      raise AssertionError(f'Unexpected cleanup value: {cleanup}')
 
   def _internal_add_cleanup_on_success(
       self,
@@ -849,8 +838,7 @@ class TestCase(unittest.TestCase):
       self._feedErrorsToResult(result, outcome.errors)  # pytype: disable=attribute-error
       return result.wasSuccessful()
 
-  def shortDescription(self):
-    # type: () -> Text
+  def shortDescription(self) -> str:
     """Formats both the test method name and the first line of its docstring.
 
     If no docstring is given, only returns the method name.
@@ -875,7 +863,7 @@ class TestCase(unittest.TestCase):
     #       unittest.TestCase = TestCase
     # Because of this, direct invocation of what we think is the
     # superclass will actually cause infinite recursion.
-    doc_first_line = super(TestCase, self).shortDescription()
+    doc_first_line = super().shortDescription()
     if doc_first_line is not None:
       desc = '\n'.join((desc, doc_first_line))
     return desc
@@ -944,6 +932,12 @@ class TestCase(unittest.TestCase):
       prefix = [prefix]
       prefix_len = 1
 
+    if isinstance(whole, abc.Mapping) or isinstance(whole, abc.Set):
+      self.fail(
+          'For whole: Mapping or Set objects are not supported, found type: %s'
+          % type(whole),
+          msg,
+      )
     try:
       whole_len = len(whole)
     except (TypeError, NotImplementedError):
@@ -980,7 +974,7 @@ class TestCase(unittest.TestCase):
     # explicitly check the length since some Sized objects (e.g. numpy.ndarray)
     # have strange __nonzero__/__bool__ behavior.
     if len(container):  # pylint: disable=g-explicit-length-test
-      self.fail('{!r} has length of {}.'.format(container, len(container)), msg)
+      self.fail(f'{container!r} has length of {len(container)}.', msg)
 
   def assertNotEmpty(self, container, msg=None):
     """Asserts that an object has non-zero length.
@@ -996,7 +990,7 @@ class TestCase(unittest.TestCase):
     # explicitly check the length since some Sized objects (e.g. numpy.ndarray)
     # have strange __nonzero__/__bool__ behavior.
     if not len(container):  # pylint: disable=g-explicit-length-test
-      self.fail('{!r} has length of 0.'.format(container), msg)
+      self.fail(f'{container!r} has length of 0.', msg)
 
   def assertLen(self, container, expected_len, msg=None):
     """Asserts that an object has the expected length.
@@ -1051,7 +1045,7 @@ class TestCase(unittest.TestCase):
                                delta=delta)
         # pytype: enable=wrong-keyword-args
       except self.failureException as err:
-        err_list.append('At index {}: {}'.format(idx, err))
+        err_list.append(f'At index {idx}: {err}')
 
     if err_list:
       if len(err_list) > 30:
@@ -1119,8 +1113,8 @@ class TestCase(unittest.TestCase):
                 'Did you mean to use assertEqual?\n'
                 'Expected: %s\nActual: %s' % (expected_seq, actual_seq))
     try:
-      expected = dict([(element, None) for element in expected_seq])
-      actual = dict([(element, None) for element in actual_seq])
+      expected = {element: None for element in expected_seq}
+      actual = {element: None for element in actual_seq}
       missing = [element for element in expected if element not in actual]
       unexpected = [element for element in actual if element not in expected]
       missing.sort()
@@ -1153,7 +1147,7 @@ class TestCase(unittest.TestCase):
                       str), ('Second argument is not a string: %r' % (second,))
     line_limit = kwargs.pop('line_limit', 0)
     if kwargs:
-      raise TypeError('Unexpected keyword args {}'.format(tuple(kwargs)))
+      raise TypeError(f'Unexpected keyword args {tuple(kwargs)}')
 
     if first == second:
       return
@@ -1236,7 +1230,7 @@ class TestCase(unittest.TestCase):
       regex_type = bytes
 
     if regex_type is str:
-      regex = u'(?:%s)' % u')|(?:'.join(regexes)
+      regex = '(?:%s)' % ')|(?:'.join(regexes)
     elif regex_type is bytes:
       regex = b'(?:' + (b')|(?:'.join(regexes)) + b')'
     else:
@@ -1335,7 +1329,7 @@ class TestCase(unittest.TestCase):
                 _quote_long_string(err),
                 regexes)))
 
-  class _AssertRaisesContext(object):
+  class _AssertRaisesContext:
 
     def __init__(self, expected_exception, test_case, test_func, msg=None):
       self.expected_exception = expected_exception
@@ -1370,7 +1364,7 @@ class TestCase(unittest.TestCase):
       *args, **kwargs) -> None:
     # The purpose of this return statement is to work around
     # https://github.com/PyCQA/pylint/issues/5273; it is otherwise ignored.
-    return self._AssertRaisesContext(None, None, None)
+    return self._AssertRaisesContext(None, None, None)  # type: ignore[return-value]
 
   def assertRaisesWithPredicateMatch(self, expected_exception, predicate,
                                      callable_obj=None, *args, **kwargs):
@@ -1414,7 +1408,7 @@ class TestCase(unittest.TestCase):
       callable_obj: Callable[..., Any], *args, **kwargs) -> None:
     # The purpose of this return statement is to work around
     # https://github.com/PyCQA/pylint/issues/5273; it is otherwise ignored.
-    return self._AssertRaisesContext(None, None, None)
+    return self._AssertRaisesContext(None, None, None)  # type: ignore[return-value]
 
   def assertRaisesWithLiteralMatch(self, expected_exception,
                                    expected_exception_message,
@@ -1673,14 +1667,34 @@ class TestCase(unittest.TestCase):
     Raises:
       AssertionError: if the dictionaries are not equal.
     """
-    self.assertIsInstance(a, dict, self._formatMessage(
-        msg,
-        'First argument is not a dictionary'
-    ))
-    self.assertIsInstance(b, dict, self._formatMessage(
-        msg,
-        'Second argument is not a dictionary'
-    ))
+    self.assertMappingEqual(a, b, msg, mapping_type=dict)
+
+  def assertMappingEqual(
+      self, a, b, msg=None, mapping_type=collections.abc.Mapping
+  ):
+    """Raises AssertionError if a and b are not equal mappings.
+
+    Args:
+      a: A mapping, the expected value.
+      b: A mapping, the actual value.
+      msg: An optional str, the associated message.
+
+    Raises:
+      AssertionError: if the dictionaries are not equal.
+    """
+
+    if not isinstance(a, mapping_type):
+      self.fail(
+          'a should be a %s, found type: %s'
+          % (mapping_type.__name__, type(a).__name__),
+          msg,
+      )
+    if not isinstance(b, mapping_type):
+      self.fail(
+          'b should be a %s, found type: %s'
+          % (mapping_type.__name__, type(b).__name__),
+          msg,
+      )
 
     def Sorted(list_of_items):
       try:
@@ -1738,6 +1752,66 @@ class TestCase(unittest.TestCase):
               ('%s: %s\n' % (safe_repr(k), safe_repr(v)) for k, v in missing)))
 
     raise self.failureException('\n'.join(message))
+
+  def assertDataclassEqual(self, first, second, msg=None):
+    """Asserts two dataclasses are equal with more informative errors.
+
+    Arguments must both be dataclasses. This compares equality of  individual
+    fields and takes care to not compare fields that are marked as
+    non-comparable. It gives per field differences, which are easier to parse
+    than the comparison of the string representations from assertEqual.
+
+    In cases where the dataclass has a custom __eq__, and it is defined in a
+    way that is inconsistent with equality of comparable fields, we raise an
+    exception without further trying to figure out how they are different.
+
+    Args:
+      first: A dataclass, the first value.
+      second: A dataclass, the second value.
+      msg: An optional str, the associated message.
+
+    Raises:
+      AssertionError: if the dataclasses are not equal.
+    """
+
+    if not dataclasses.is_dataclass(first) or isinstance(first, type):
+      raise self.failureException('First argument is not a dataclass instance.')
+    if not dataclasses.is_dataclass(second) or isinstance(second, type):
+      raise self.failureException(
+          'Second argument is not a dataclass instance.'
+      )
+
+    if first == second:
+      return
+
+    if type(first) is not type(second):
+      self.fail(
+          'Found different dataclass types: %s != %s'
+          % (type(first), type(second)),
+          msg,
+      )
+
+    # Make sure to skip fields that are marked compare=False.
+    different = [
+        (f.name, getattr(first, f.name), getattr(second, f.name))
+        for f in dataclasses.fields(first)
+        if f.compare and getattr(first, f.name) != getattr(second, f.name)
+    ]
+
+    safe_repr = unittest.util.safe_repr  # pytype: disable=module-attr
+    message = ['%s != %s' % (safe_repr(first), safe_repr(second))]
+    if different:
+      message.append('Fields that differ:')
+      message.extend(
+          '%s: %s != %s' % (k, safe_repr(first_v), safe_repr(second_v))
+          for k, first_v, second_v in different
+      )
+    else:
+      message.append(
+          'Cannot detect difference by examining the fields of the dataclass.'
+      )
+
+    self.fail('\n'.join(message), msg)
 
   def assertUrlEqual(self, a, b, msg=None):
     """Asserts that urls are equal, ignoring ordering of query params."""
@@ -1819,27 +1893,29 @@ class TestCase(unittest.TestCase):
     self.assertSameStructure(first_structured, second_structured,
                              aname='first', bname='second', msg=msg)
 
-  def _getAssertEqualityFunc(self, first, second):
-    # type: (Any, Any) -> Callable[..., None]
+  def _getAssertEqualityFunc(
+      self, first: Any, second: Any
+  ) -> Callable[..., None]:
     try:
-      return super(TestCase, self)._getAssertEqualityFunc(first, second)
+      return super()._getAssertEqualityFunc(first, second)
     except AttributeError:
       # This is a workaround if unittest.TestCase.__init__ was never run.
       # It usually means that somebody created a subclass just for the
       # assertions and has overridden __init__. "assertTrue" is a safe
       # value that will not make __init__ raise a ValueError.
       test_method = getattr(self, '_testMethodName', 'assertTrue')
-      super(TestCase, self).__init__(test_method)
+      super().__init__(test_method)
 
-    return super(TestCase, self)._getAssertEqualityFunc(first, second)
+    return super()._getAssertEqualityFunc(first, second)
 
-  def fail(self, msg=None, prefix=None):
-    """Fail immediately with the given message, optionally prefixed."""
-    return super(TestCase, self).fail(self._formatMessage(prefix, msg))
+  def fail(self, msg=None, user_msg=None) -> NoReturn:
+    """Fail immediately with the given standard message and user message."""
+    super().fail(self._formatMessage(user_msg, msg))
 
 
-def _sorted_list_difference(expected, actual):
-  # type: (List[_T], List[_T]) -> Tuple[List[_T], List[_T]]
+def _sorted_list_difference(
+    expected: List[_T], actual: List[_T]
+) -> Tuple[List[_T], List[_T]]:
   """Finds elements in only one or the other of two, sorted input lists.
 
   Returns a two-element tuple of lists.  The first list contains those
@@ -1862,12 +1938,12 @@ def _sorted_list_difference(expected, actual):
     try:
       e = expected[i]
       a = actual[j]
-      if e < a:
+      if e < a:  # type: ignore[operator]
         missing.append(e)
         i += 1
         while expected[i] == e:
           i += 1
-      elif e > a:
+      elif e > a:  # type: ignore[operator]
         unexpected.append(a)
         j += 1
         while actual[j] == a:
@@ -1888,25 +1964,21 @@ def _sorted_list_difference(expected, actual):
   return missing, unexpected
 
 
-def _are_both_of_integer_type(a, b):
-  # type: (object, object) -> bool
+def _are_both_of_integer_type(a: object, b: object) -> bool:
   return isinstance(a, int) and isinstance(b, int)
 
 
-def _are_both_of_sequence_type(a, b):
-  # type: (object, object) -> bool
+def _are_both_of_sequence_type(a: object, b: object) -> bool:
   return isinstance(a, abc.Sequence) and isinstance(
       b, abc.Sequence) and not isinstance(
           a, _TEXT_OR_BINARY_TYPES) and not isinstance(b, _TEXT_OR_BINARY_TYPES)
 
 
-def _are_both_of_set_type(a, b):
-  # type: (object, object) -> bool
+def _are_both_of_set_type(a: object, b: object) -> bool:
   return isinstance(a, abc.Set) and isinstance(b, abc.Set)
 
 
-def _are_both_of_mapping_type(a, b):
-  # type: (object, object) -> bool
+def _are_both_of_mapping_type(a: object, b: object) -> bool:
   return isinstance(a, abc.Mapping) and isinstance(
       b, abc.Mapping)
 
@@ -2018,20 +2090,31 @@ def get_command_stderr(command, env=None, close_fds=True):
     close_fds = False
 
   use_shell = isinstance(command, str)
-  process = subprocess.Popen(
+  # Pass the shell command as stdin to /bin/sh rather than using Python's
+  # behavior of passing it in as a command line argument. That can save us when
+  # the shell command exceeds the maximum command line length but the actual
+  # individual process invocations within it don't.
+  if os.name != 'nt' and use_shell:
+    stdin_input = command.encode()
+    command = ['/bin/sh']
+    use_shell = False
+  else:
+    stdin_input = None
+
+  result = subprocess.run(
       command,
       close_fds=close_fds,
       env=env,
       shell=use_shell,
+      input=stdin_input,
       stderr=subprocess.STDOUT,
-      stdout=subprocess.PIPE)
-  output = process.communicate()[0]
-  exit_status = process.wait()
-  return (exit_status, output)
+      stdout=subprocess.PIPE,
+      check=False,
+  )
+  return (result.returncode, result.stdout)
 
 
-def _quote_long_string(s):
-  # type: (Union[Text, bytes, bytearray]) -> Text
+def _quote_long_string(s: Union[str, bytes, bytearray]) -> str:
   """Quotes a potentially multi-line string to make the start and end obvious.
 
   Args:
@@ -2050,8 +2133,7 @@ def _quote_long_string(s):
           '----------->8\n')
 
 
-def print_python_version():
-  # type: () -> None
+def print_python_version() -> None:
   # Having this in the test output logs by default helps debugging when all
   # you've got is the log and no other idea of which Python was used.
   sys.stderr.write('Running tests under Python {0[0]}.{0[1]}.{0[2]}: '
@@ -2060,8 +2142,7 @@ def print_python_version():
                        sys.executable if sys.executable else 'embedded.'))
 
 
-def main(*args, **kwargs):
-  # type: (Text, Any) -> None
+def main(*args: str, **kwargs: Any) -> None:
   """Executes a set of Python unit tests.
 
   Usually this function is called without arguments, so the
@@ -2079,8 +2160,7 @@ def main(*args, **kwargs):
   _run_in_app(run_tests, args, kwargs)
 
 
-def _is_in_app_main():
-  # type: () -> bool
+def _is_in_app_main() -> bool:
   """Returns True iff app.run is active."""
   f = sys._getframe().f_back  # pylint: disable=protected-access
   while f:
@@ -2090,10 +2170,9 @@ def _is_in_app_main():
   return False
 
 
-def _register_sigterm_with_faulthandler():
-  # type: () -> None
+def _register_sigterm_with_faulthandler() -> None:
   """Have faulthandler dump stacks on SIGTERM.  Useful to diagnose timeouts."""
-  if faulthandler and getattr(faulthandler, 'register', None):
+  if getattr(faulthandler, 'register', None):
     # faulthandler.register is not available on Windows.
     # faulthandler.enable() is already called by app.run.
     try:
@@ -2103,8 +2182,11 @@ def _register_sigterm_with_faulthandler():
                        '%r; ignoring.\n' % e)
 
 
-def _run_in_app(function, args, kwargs):
-  # type: (Callable[..., None], Sequence[Text], Mapping[Text, Any]) -> None
+def _run_in_app(
+    function: Callable[..., None],
+    args: Sequence[str],
+    kwargs: Mapping[str, Any],
+) -> None:
   """Executes a set of Python unit tests, ensuring app.run.
 
   This is a private function, users should call absltest.main().
@@ -2163,12 +2245,12 @@ def _run_in_app(function, args, kwargs):
     # This must be a separate loop since multiple flag names (short_name=) can
     # point to the same flag object.
     for name in FLAGS:
-      FLAGS[name].parse = noop_parse
+      FLAGS[name].parse = noop_parse  # type: ignore[method-assign]
     try:
       argv = FLAGS(sys.argv)
     finally:
       for name in FLAGS:
-        FLAGS[name].parse = stored_parse_methods[name]
+        FLAGS[name].parse = stored_parse_methods[name]  # type: ignore[method-assign]
       sys.stdout.flush()
 
     function(argv, args, kwargs)
@@ -2184,8 +2266,9 @@ def _run_in_app(function, args, kwargs):
     app.run(main=main_function)
 
 
-def _is_suspicious_attribute(testCaseClass, name):
-  # type: (Type, Text) -> bool
+def _is_suspicious_attribute(
+    testCaseClass: Type[unittest.TestCase], name: str
+) -> bool:
   """Returns True if an attribute is a method named like a test method."""
   if name.startswith('Test') and len(name) > 4 and name[4].isupper():
     attr = getattr(testCaseClass, name)
@@ -2197,8 +2280,7 @@ def _is_suspicious_attribute(testCaseClass, name):
   return False
 
 
-def skipThisClass(reason):
-  # type: (Text) -> Callable[[_T], _T]
+def skipThisClass(reason: str) -> Callable[[_T], _T]:
   """Skip tests in the decorated TestCase, but not any of its subclasses.
 
   This decorator indicates that this class should skip all its tests, but not
@@ -2238,12 +2320,13 @@ def skipThisClass(reason):
     Decorator function that will cause a class to be skipped.
   """
   if isinstance(reason, type):
-    raise TypeError('Got {!r}, expected reason as string'.format(reason))
+    raise TypeError(f'Got {reason!r}, expected reason as string')
 
   def _skip_class(test_case_class):
     if not issubclass(test_case_class, unittest.TestCase):
       raise TypeError(
-          'Decorating {!r}, expected TestCase subclass'.format(test_case_class))
+          f'Decorating {test_case_class!r}, expected TestCase subclass'
+      )
 
     # Only shadow the setUpClass method if it is directly defined. If it is
     # in the parent class we invoke it via a super() call instead of holding
@@ -2289,7 +2372,7 @@ class TestLoader(unittest.TestLoader):
   with 'Test'.""")
 
   def __init__(self, *args, **kwds):
-    super(TestLoader, self).__init__(*args, **kwds)
+    super().__init__(*args, **kwds)
     seed = _get_default_randomize_ordering_seed()
     if seed:
       self._randomize_ordering_seed = seed
@@ -2303,7 +2386,7 @@ class TestLoader(unittest.TestLoader):
     for name in dir(testCaseClass):
       if _is_suspicious_attribute(testCaseClass, name):
         raise TypeError(TestLoader._ERROR_MSG % name)
-    names = list(super(TestLoader, self).getTestCaseNames(testCaseClass))
+    names = list(super().getTestCaseNames(testCaseClass))
     if self._randomize_ordering_seed is not None:
       logging.info(
           'Randomizing test order with seed: %d', self._randomize_ordering_seed)
@@ -2314,8 +2397,7 @@ class TestLoader(unittest.TestLoader):
     return names
 
 
-def get_default_xml_output_filename():
-  # type: () -> Optional[Text]
+def get_default_xml_output_filename() -> Optional[str]:
   if os.environ.get('XML_OUTPUT_FILE'):
     return os.environ['XML_OUTPUT_FILE']
   elif os.environ.get('RUNNING_UNDER_TEST_DAEMON'):
@@ -2324,10 +2406,10 @@ def get_default_xml_output_filename():
     return os.path.join(
         os.environ['TEST_XMLOUTPUTDIR'],
         os.path.splitext(os.path.basename(sys.argv[0]))[0] + '.xml')
+  return None
 
 
-def _setup_filtering(argv):
-  # type: (MutableSequence[Text]) -> None
+def _setup_filtering(argv: MutableSequence[str]) -> bool:
   """Implements the bazel test filtering protocol.
 
   The following environment variable is used in this method:
@@ -2342,20 +2424,21 @@ def _setup_filtering(argv):
 
   Args:
     argv: the argv to mutate in-place.
+
+  Returns:
+    Whether test filtering is requested.
   """
   test_filter = os.environ.get('TESTBRIDGE_TEST_ONLY')
   if argv is None or not test_filter:
-    return
+    return False
 
-  filters = shlex.split(test_filter)
-  if sys.version_info[:2] >= (3, 7):
-    filters = ['-k=' + test_filter for test_filter in filters]
+  filters = ['-k=' + test_filter for test_filter in shlex.split(test_filter)]
 
   argv[1:1] = filters
+  return True
 
 
-def _setup_test_runner_fail_fast(argv):
-  # type: (MutableSequence[Text]) -> None
+def _setup_test_runner_fail_fast(argv: MutableSequence[str]) -> None:
   """Implements the bazel test fail fast protocol.
 
   The following environment variable is used in this method:
@@ -2378,8 +2461,9 @@ def _setup_test_runner_fail_fast(argv):
   argv[1:1] = ['--failfast']
 
 
-def _setup_sharding(custom_loader=None):
-  # type: (Optional[unittest.TestLoader]) -> unittest.TestLoader
+def _setup_sharding(
+    custom_loader: Optional[unittest.TestLoader] = None,
+) -> Tuple[unittest.TestLoader, Optional[int]]:
   """Implements the bazel sharding protocol.
 
   The following environment variables are used in this method:
@@ -2398,8 +2482,10 @@ def _setup_sharding(custom_loader=None):
     custom_loader: A TestLoader to be made sharded.
 
   Returns:
-    The test loader for shard-filtering or the standard test loader, depending
-    on the sharding environment variables.
+    A tuple of ``(test_loader, shard_index)``. ``test_loader`` is for
+    shard-filtering or the standard test loader depending on the sharding
+    environment variables. ``shard_index`` is the shard index, or ``None`` when
+    sharding is not used.
   """
 
   # It may be useful to write the shard file even if the other sharding
@@ -2409,7 +2495,7 @@ def _setup_sharding(custom_loader=None):
     try:
       with open(os.environ['TEST_SHARD_STATUS_FILE'], 'w') as f:
         f.write('')
-    except IOError:
+    except OSError:
       sys.stderr.write('Error opening TEST_SHARD_STATUS_FILE (%s). Exiting.'
                        % os.environ['TEST_SHARD_STATUS_FILE'])
       sys.exit(1)
@@ -2417,7 +2503,7 @@ def _setup_sharding(custom_loader=None):
   base_loader = custom_loader or TestLoader()
   if 'TEST_TOTAL_SHARDS' not in os.environ:
     # Not using sharding, use the expected test loader.
-    return base_loader
+    return base_loader, None
 
   total_shards = int(os.environ['TEST_TOTAL_SHARDS'])
   shard_index = int(os.environ['TEST_SHARD_INDEX'])
@@ -2445,33 +2531,81 @@ def _setup_sharding(custom_loader=None):
         filtered_names.append(testcase)
     return [x for x in ordered_names if x in filtered_names]
 
-  base_loader.getTestCaseNames = getShardedTestCaseNames
-  return base_loader
+  base_loader.getTestCaseNames = getShardedTestCaseNames  # type: ignore[method-assign]
+  return base_loader, shard_index
 
 
-# pylint: disable=line-too-long
-def _run_and_get_tests_result(argv, args, kwargs, xml_test_runner_class):
-  # type: (MutableSequence[Text], Sequence[Any], MutableMapping[Text, Any], Type) -> unittest.TestResult
-  # pylint: enable=line-too-long
-  """Same as run_tests, except it returns the result instead of exiting."""
+def _run_and_get_tests_result(
+    argv: MutableSequence[str],
+    args: Sequence[Any],
+    kwargs: MutableMapping[str, Any],
+    xml_test_runner_class: Type[unittest.TextTestRunner],
+) -> Tuple[unittest.TestResult, bool]:
+  """Same as run_tests, but it doesn't exit.
+
+  Args:
+    argv: sys.argv with the command-line flags removed from the front, i.e. the
+      argv with which :func:`app.run()<absl.app.run>` has called
+      ``__main__.main``. It is passed to
+      ``unittest.TestProgram.__init__(argv=)``, which does its own flag parsing.
+      It is ignored if kwargs contains an argv entry.
+    args: Positional arguments passed through to
+      ``unittest.TestProgram.__init__``.
+    kwargs: Keyword arguments passed through to
+      ``unittest.TestProgram.__init__``.
+    xml_test_runner_class: The type of the test runner class.
+
+  Returns:
+    A tuple of ``(test_result, fail_when_no_tests_ran)``.
+    ``fail_when_no_tests_ran`` indicates whether the test should fail when
+    no tests ran.
+  """
 
   # The entry from kwargs overrides argv.
   argv = kwargs.pop('argv', argv)
 
+  if sys.version_info[:2] >= (3, 12):
+    # Python 3.12 unittest changed the behavior from PASS to FAIL in
+    # https://github.com/python/cpython/pull/102051. absltest follows this.
+    fail_when_no_tests_ran = True
+  else:
+    # Historically, absltest and unittest before Python 3.12 passes if no tests
+    # ran.
+    fail_when_no_tests_ran = False
+
   # Set up test filtering if requested in environment.
-  _setup_filtering(argv)
+  if _setup_filtering(argv):
+    # When test filtering is requested, ideally we also want to fail when no
+    # tests ran. However, the test filters are usually done when running bazel.
+    # When you run multiple targets, e.g. `bazel test //my_dir/...
+    # --test_filter=MyTest`, you don't necessarily want individual tests to fail
+    # because no tests match in that particular target.
+    # Due to this use case, we don't fail when test filtering is requested via
+    # the environment variable from bazel.
+    fail_when_no_tests_ran = False
+
   # Set up --failfast as requested in environment
   _setup_test_runner_fail_fast(argv)
 
   # Shard the (default or custom) loader if sharding is turned on.
-  kwargs['testLoader'] = _setup_sharding(kwargs.get('testLoader', None))
+  kwargs['testLoader'], shard_index = _setup_sharding(
+      kwargs.get('testLoader', None)
+  )
+  if shard_index is not None and shard_index > 0:
+    # When sharding is requested, all the shards except the first one shall not
+    # fail when no tests ran. This happens when the shard count is greater than
+    # the test case count.
+    fail_when_no_tests_ran = False
 
   # XML file name is based upon (sorted by priority):
   # --xml_output_file flag, XML_OUTPUT_FILE variable,
   # TEST_XMLOUTPUTDIR variable or RUNNING_UNDER_TEST_DAEMON variable.
-  if not FLAGS.xml_output_file:
-    FLAGS.xml_output_file = get_default_xml_output_filename()
-  xml_output_file = FLAGS.xml_output_file
+  if FLAGS.xml_output_file:
+    xml_output_file = FLAGS.xml_output_file
+  else:
+    xml_output_file = get_default_xml_output_filename()
+    if xml_output_file:
+      FLAGS.xml_output_file = xml_output_file
 
   xml_buffer = None
   if xml_output_file:
@@ -2542,9 +2676,13 @@ def _run_and_get_tests_result(argv, args, kwargs, xml_test_runner_class):
   # on argv, which is sys.argv without the command-line flags.
   kwargs['argv'] = argv
 
+  # Request unittest.TestProgram to not exit. The exit will be handled by
+  # `absltest.run_tests`.
+  kwargs['exit'] = False
+
   try:
     test_program = unittest.TestProgram(*args, **kwargs)
-    return test_program.result
+    return test_program.result, fail_when_no_tests_ran
   finally:
     if xml_buffer:
       try:
@@ -2554,9 +2692,11 @@ def _run_and_get_tests_result(argv, args, kwargs, xml_test_runner_class):
         xml_buffer.close()
 
 
-def run_tests(argv, args, kwargs):  # pylint: disable=line-too-long
-  # type: (MutableSequence[Text], Sequence[Any], MutableMapping[Text, Any]) -> None
-  # pylint: enable=line-too-long
+def run_tests(
+    argv: MutableSequence[str],
+    args: Sequence[Any],
+    kwargs: MutableMapping[str, Any],
+) -> None:
   """Executes a set of Python unit tests.
 
   Most users should call absltest.main() instead of run_tests.
@@ -2577,13 +2717,17 @@ def run_tests(argv, args, kwargs):  # pylint: disable=line-too-long
     kwargs: Keyword arguments passed through to
       ``unittest.TestProgram.__init__``.
   """
-  result = _run_and_get_tests_result(
-      argv, args, kwargs, xml_reporter.TextAndXMLTestRunner)
+  result, fail_when_no_tests_ran = _run_and_get_tests_result(
+      argv, args, kwargs, xml_reporter.TextAndXMLTestRunner
+  )
+  if fail_when_no_tests_ran and result.testsRun == 0 and not result.skipped:
+    # Python 3.12 unittest exits with 5 when no tests ran. The exit code 5 comes
+    # from pytest which does the same thing.
+    sys.exit(5)
   sys.exit(not result.wasSuccessful())
 
 
-def _rmtree_ignore_errors(path):
-  # type: (Text) -> None
+def _rmtree_ignore_errors(path: str) -> None:
   if os.path.isfile(path):
     try:
       os.unlink(path)
@@ -2593,7 +2737,6 @@ def _rmtree_ignore_errors(path):
     shutil.rmtree(path, ignore_errors=True)
 
 
-def _get_first_part(path):
-  # type: (Text) -> Text
+def _get_first_part(path: str) -> str:
   parts = path.split(os.sep, 1)
   return parts[0]

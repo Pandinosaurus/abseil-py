@@ -20,6 +20,7 @@ import sys
 import threading
 import time
 import traceback
+from typing import Any, Dict
 import unittest
 from xml.sax import saxutils
 from absl.testing import _pretty_print_reporter
@@ -30,7 +31,8 @@ _bad_control_character_codes = set(range(0, 0x20)) - {0x9, 0xA, 0xD}
 
 
 _control_character_conversions = {
-    chr(i): '\\x{:02x}'.format(i) for i in _bad_control_character_codes}
+    chr(i): f'\\x{i:02x}' for i in _bad_control_character_codes
+}
 
 
 _escape_xml_attr_conversions = {
@@ -109,14 +111,19 @@ def _print_xml_element_header(element, attributes, stream, indentation=''):
 # This prevents bad interactions with tests that stub out time.
 _time_copy = time.time
 
-if hasattr(traceback, '_some_str'):
-  # Use the traceback module str function to format safely.
-  _safe_str = traceback._some_str
-else:
-  _safe_str = str  # pylint: disable=invalid-name
+
+def _safe_str(obj: object) -> str:
+  """Returns a string representation of an object."""
+  try:
+    return str(obj)
+  except Exception:  # pylint: disable=broad-except
+    return '<unprintable %s.%s object>' % (
+        type(obj).__module__,
+        type(obj).__name__,
+    )
 
 
-class _TestCaseResult(object):
+class _TestCaseResult:
   """Private helper for _TextAndXMLTestResult that represents a test result.
 
   Attributes:
@@ -220,7 +227,7 @@ class _TestCaseResult(object):
                    % (outcome, message, exception_type, error_msg, outcome))
 
 
-class _TestSuiteResult(object):
+class _TestSuiteResult:
   """Private helper for _TextAndXMLTestResult."""
 
   def __init__(self):
@@ -337,7 +344,7 @@ class _TextAndXMLTestResult(_pretty_print_reporter.TextTestResult):
 
   def __init__(self, xml_stream, stream, descriptions, verbosity,
                time_getter=_time_copy, testsuites_properties=None):
-    super(_TextAndXMLTestResult, self).__init__(stream, descriptions, verbosity)
+    super().__init__(stream, descriptions, verbosity)
     self.xml_stream = xml_stream
     self.pending_test_case_results = {}
     self.suite = self._TEST_SUITE_RESULT_CLASS()
@@ -350,17 +357,20 @@ class _TextAndXMLTestResult(_pretty_print_reporter.TextTestResult):
 
   def startTest(self, test):
     self.start_time = self.time_getter()
-    super(_TextAndXMLTestResult, self).startTest(test)
+    super().startTest(test)
 
   def stopTest(self, test):
     # Grabbing the write lock to avoid conflicting with stopTestRun.
     with self._pending_test_case_results_lock:
-      super(_TextAndXMLTestResult, self).stopTest(test)
+      super().stopTest(test)
       result = self.get_pending_test_case_result(test)
       if not result:
         test_name = test.id() or str(test)
         sys.stderr.write('No pending test case: %s\n' % test_name)
         return
+      if getattr(self, 'start_time', None) is None:
+        # startTest may not be called for skipped tests since Python 3.12.1.
+        self.start_time = self.time_getter()
       test_id = id(test)
       run_time = self.time_getter() - self.start_time
       result.set_run_time(run_time)
@@ -370,7 +380,7 @@ class _TextAndXMLTestResult(_pretty_print_reporter.TextTestResult):
 
   def startTestRun(self):
     self.suite.set_start_time(self.time_getter())
-    super(_TextAndXMLTestResult, self).startTestRun()
+    super().startTestRun()
 
   def stopTestRun(self):
     self.suite.set_end_time(self.time_getter())
@@ -386,7 +396,7 @@ class _TextAndXMLTestResult(_pretty_print_reporter.TextTestResult):
       # reporting here.
       for test_id in self.pending_test_case_results:
         result = self.pending_test_case_results[test_id]
-        if hasattr(self, 'start_time'):
+        if getattr(self, 'start_time', None) is not None:
           run_time = self.suite.overall_end_time - self.start_time
           result.set_run_time(run_time)
           result.set_start_time(self.start_time)
@@ -407,7 +417,7 @@ class _TextAndXMLTestResult(_pretty_print_reporter.TextTestResult):
       A formatted exception string.
     """
     if test:
-      return super(_TextAndXMLTestResult, self)._exc_info_to_string(err, test)
+      return super()._exc_info_to_string(err, test)
     return ''.join(traceback.format_exception(*err))
 
   def add_pending_test_case_result(self, test, error_summary=None,
@@ -452,34 +462,34 @@ class _TextAndXMLTestResult(_pretty_print_reporter.TextTestResult):
     return self.pending_test_case_results.get(test_id, None)
 
   def addSuccess(self, test):
-    super(_TextAndXMLTestResult, self).addSuccess(test)
+    super().addSuccess(test)
     self.add_pending_test_case_result(test)
 
   def addError(self, test, err):
-    super(_TextAndXMLTestResult, self).addError(test, err)
+    super().addError(test, err)
     error_summary = ('error', err[0], err[1],
                      self._exc_info_to_string(err, test=test))
     self.add_pending_test_case_result(test, error_summary=error_summary)
 
   def addFailure(self, test, err):
-    super(_TextAndXMLTestResult, self).addFailure(test, err)
+    super().addFailure(test, err)
     error_summary = ('failure', err[0], err[1],
                      self._exc_info_to_string(err, test=test))
     self.add_pending_test_case_result(test, error_summary=error_summary)
 
   def addSkip(self, test, reason):
-    super(_TextAndXMLTestResult, self).addSkip(test, reason)
+    super().addSkip(test, reason)
     self.add_pending_test_case_result(test, skip_reason=reason)
 
   def addExpectedFailure(self, test, err):
-    super(_TextAndXMLTestResult, self).addExpectedFailure(test, err)
+    super().addExpectedFailure(test, err)
     if callable(getattr(test, 'recordProperty', None)):
       test.recordProperty('EXPECTED_FAILURE',
                           self._exc_info_to_string(err, test=test))
     self.add_pending_test_case_result(test)
 
   def addUnexpectedSuccess(self, test):
-    super(_TextAndXMLTestResult, self).addUnexpectedSuccess(test)
+    super().addUnexpectedSuccess(test)
     test_name = test.id() or str(test)
     error_summary = ('error', '', '',
                      'Test case %s should have failed, but passed.'
@@ -487,7 +497,7 @@ class _TextAndXMLTestResult(_pretty_print_reporter.TextTestResult):
     self.add_pending_test_case_result(test, error_summary=error_summary)
 
   def addSubTest(self, test, subtest, err):  # pylint: disable=invalid-name
-    super(_TextAndXMLTestResult, self).addSubTest(test, subtest, err)
+    super().addSubTest(test, subtest, err)
     if err is not None:
       if issubclass(err[0], test.failureException):
         error_summary = ('failure', err[0], err[1],
@@ -500,7 +510,7 @@ class _TextAndXMLTestResult(_pretty_print_reporter.TextTestResult):
     self.add_pending_test_case_result(subtest, error_summary=error_summary)
 
   def printErrors(self):
-    super(_TextAndXMLTestResult, self).printErrors()
+    super().printErrors()
     self.xml_stream.write('<?xml version="1.0"?>\n')
     self.suite.print_xml_summary(self.xml_stream)
 
@@ -515,7 +525,7 @@ class TextAndXMLTestRunner(unittest.TextTestRunner):
   _TEST_RESULT_CLASS = _TextAndXMLTestResult
 
   _xml_stream = None
-  _testsuites_properties = {}
+  _testsuites_properties: Dict[Any, Any] = {}
 
   def __init__(self, xml_stream=None, *args, **kwargs):
     """Initialize a TextAndXMLTestRunner.
@@ -528,7 +538,7 @@ class TextAndXMLTestRunner(unittest.TextTestRunner):
       *args: passed unmodified to unittest.TextTestRunner.__init__.
       **kwargs: passed unmodified to unittest.TextTestRunner.__init__.
     """
-    super(TextAndXMLTestRunner, self).__init__(*args, **kwargs)
+    super().__init__(*args, **kwargs)
     if xml_stream is not None:
       self._xml_stream = xml_stream
     # else, do not set self._xml_stream to None -- this allows implicit fallback
@@ -549,7 +559,7 @@ class TextAndXMLTestRunner(unittest.TextTestRunner):
 
   def _makeResult(self):
     if self._xml_stream is None:
-      return super(TextAndXMLTestRunner, self)._makeResult()
+      return super()._makeResult()
     else:
       return self._TEST_RESULT_CLASS(
           self._xml_stream, self.stream, self.descriptions, self.verbosity,

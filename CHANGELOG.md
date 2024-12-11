@@ -6,19 +6,78 @@ The format is based on [Keep a Changelog](https://keepachangelog.com).
 
 ## Unreleased
 
+Nothing notable unreleased.
+
+*   (testing) Added a new method `absltest.TestCase.assertMappingEqual` that
+    tests equality of Mapping objects not requiring them to be dicts. Similar
+    to `assertSequenceEqual` but for mappings.
+
+### Fixed
+
+*  (testing) Fixed an issue where the test reporter crashes with exceptions with
+   no string representation, starting with Python 3.11.
+
+## 2.1.0 (2024-01-16)
+
+### Added
+
+*   (flags) Added `absl.flags.override_value` function to provide `FlagHolder`
+    with a construct to modify values. The new interface parallels
+    `absl.flags.FlagValues.__setattr__` but checks that the provided value
+    conforms to the flag's expected type.
+*   (testing) Added a new method `absltest.TestCase.assertDataclassEqual` that
+    tests equality of `dataclass.dataclass` objects with better error messages
+    when the assert fails.
+
+### Changed
+
+*   (flags) `absl.flags.argparse_flags.ArgumentParser` now correctly inherits
+    an empty instance of `FlagValues` to ensure that absl flags, such as
+    `--flagfile`, `--undefok` are supported.
+*   (testing) Do not exit 5 if tests were skipped on Python 3.12. This follows
+    the CPython change in https://github.com/python/cpython/pull/113856.
+
+### Fixed
+
+*   (flags) The flag `foo` no longer retains the value `bar` after
+    `FLAGS.foo = bar` fails due to a validation error.
+*   (testing) Fixed an issue caused by
+    [this Python 3.12.1 change](https://github.com/python/cpython/pull/109725)
+    where the test reporter crashes when all tests are skipped.
+
+## 2.0.0 (2023-09-19)
+
 ### Changed
 
 *   `absl-py` no longer supports Python 3.6. It has reached end-of-life for more
-     than a year now.
+    than a year now.
+*   Support Python 3.12.
+*   (logging) `logging.exception` can now take `exc_info` as argument, with
+    default value `True`. Prior to this change setting `exc_info` would raise
+    `KeyError`, this change fixes this behaviour.
 *   (testing) For Python 3.11+, the calls to `absltest.TestCase.enter_context`
     are forwarded to `unittest.TestCase.enterContext` (when called via instance)
     or `unittest.TestCase.enterClassContext` (when called via class) now. As a
     result, on Python 3.11+, the private `_cls_exit_stack` attribute is not
     defined on `absltest.TestCase` and `_exit_stack` attribute is not defined on
     its instances.
-*   `AbslTest.assertSameStructure()` now uses the test case's equality
-     functions (registered with `TestCase.addTypeEqualityFunc()`) for comparing
-     leaves of the structure.
+*   (testing) `absltest.TestCase.assertSameStructure()` now uses the test case's
+    equality functions (registered with `TestCase.addTypeEqualityFunc()`) for
+    comparing leaves of the structure.
+*   (testing) `abslTest.TestCase.fail()` now names its arguments `(self,
+    msg=None, user_msg=None)`, and not `(self, msg=None, prefix=None)`, better
+    reflecting the behavior and usage of the two message arguments.
+*   `DEFINE_enum`, `DEFINE_multi_enum`, and `EnumParser` now raise errors when
+    `enum_values` is provided as a single string value. Additionally,
+    `EnumParser.enum_values` is now stored as a list copy of the provided
+    `enum_values` parameter.
+*   (testing) Updated `paramaterized.CoopTestCase()` to use Python 3 metaclass
+    idioms. Most uses of this function continued working during the Python 3
+    migration still worked because a Python 2 compatibility `__metaclass__`
+    variables also existed. Now pure Python 3 base classes without backwards
+    compatibility will work as intended.
+*   (testing) `absltest.TestCase.assertSequenceStartsWith` now explicitly fail
+    when passed a `Mapping` or `Set` object as the `whole` argument.
 
 ## 1.4.0 (2023-01-11)
 

@@ -54,7 +54,7 @@ class ConfigurationTest(absltest.TestCase):
 class LoggerLevelsTest(parameterized.TestCase):
 
   def setUp(self):
-    super(LoggerLevelsTest, self).setUp()
+    super().setUp()
     # Since these tests muck with the flag, always save/restore in case the
     # tests forget to clean up properly.
     # enter_context() is py3-only, but manually enter/exit should suffice.
@@ -117,7 +117,7 @@ class LoggerLevelsTest(parameterized.TestCase):
     fl.parse(levels_str)
     expected = levels_str.replace(' ', '')
     actual = fl.serialize()
-    self.assertEqual('--logger_levels={}'.format(expected), actual)
+    self.assertEqual(f'--logger_levels={expected}', actual)
 
   def test_invalid_value(self):
     with self.assertRaisesRegex(ValueError, 'Unknown level.*10'):
@@ -153,8 +153,8 @@ class PythonHandlerTest(absltest.TestCase):
     self.assertEqual(sys.stderr, self.python_handler.stream)
 
   @mock.patch.object(logging, 'find_log_dir_and_names')
-  @mock.patch.object(logging.time, 'localtime')
-  @mock.patch.object(logging.time, 'time')
+  @mock.patch.object(time, 'localtime')
+  @mock.patch.object(time, 'time')
   @mock.patch.object(os.path, 'islink')
   @mock.patch.object(os, 'unlink')
   @mock.patch.object(os, 'getpid')
@@ -360,7 +360,7 @@ class PythonHandlerTest(absltest.TestCase):
 
   def test_close_fake_file(self):
 
-    class FakeFile(object):
+    class FakeFile:
       """A file-like object that does not implement "isatty"."""
 
       def __init__(self):
@@ -593,6 +593,76 @@ class ABSLLoggerTest(absltest.TestCase):
       self.logger.handle(record)
     mock_call_handlers.assert_called_once()
 
+  def test_find_caller_respects_stacklevel(self):
+    self.set_up_mock_frames()
+    self.logger.register_frame_to_skip('myfile.py', 'Method1')
+    # Frame 0 is filtered out due to being in the logging file.
+    # Frame 1 is filtered out due to being registered to be skipped.
+    # Frame 2 is the topmost unfiltered frame on the stack.
+    self.assertEqual(
+        self.logger.findCaller(stacklevel=1),
+        ('myfile.py', 125, 'Method2', None),
+    )
+    self.assertEqual(
+        self.logger.findCaller(stacklevel=2),
+        ('myfile.py', 125, 'Method3', None),
+    )
+    self.assertEqual(
+        self.logger.findCaller(stacklevel=3),
+        ('myfile.py', 249, 'Method2', None),
+    )
+
+  def test_find_caller_handles_skipped_bottom_of_stack(self):
+    self.set_up_mock_frames()
+    self.logger.register_frame_to_skip('myfile.py', 'Method2')
+    # Frame 0 is filtered out due to being in the logging file.
+    # Frame 1 is unfiltered.
+    # Frame 2 is filtered due to regiser_frame_to_skip.
+    # Frame 3 is unfiltered.
+    # Frame 4 is filtered due to regiser_frame_to_skip.
+    self.assertEqual(
+        self.logger.findCaller(stacklevel=1),
+        ('myfile.py', 125, 'Method1', None),
+    )
+    self.assertEqual(
+        self.logger.findCaller(stacklevel=2),
+        ('myfile.py', 125, 'Method3', None),
+    )
+    # 3 exceeds the unfiltered stack depth, so it returns the bottom unfiltered frame.
+    self.assertEqual(
+        self.logger.findCaller(stacklevel=3),
+        ('myfile.py', 125, 'Method3', None),
+    )
+
+  def test_log_respects_stacklevel(self):
+    self.set_up_mock_frames()
+    original_logger_class = std_logging.getLoggerClass()
+    std_logging.setLoggerClass(logging.ABSLLogger)
+    absl_logger = std_logging.getLogger('absl')
+    with self.assertLogs() as cm:
+      absl_logger.info('lol', stacklevel=2)
+    std_logging.setLoggerClass(original_logger_class)
+    self.assertLen(cm.records, 1)
+    self.assertEqual(cm.records[0].lineno, 125)
+    self.assertEqual(cm.records[0].funcName, 'Method2')
+    self.assertEqual(cm.records[0].filename, 'myfile.py')
+
+  def test_handles_negative_stacklevel(self):
+    """If stacklevel is negative, return the top unfiltered frame."""
+    self.set_up_mock_frames()
+    self.assertEqual(
+        self.logger.findCaller(stacklevel=-1),
+        ('myfile.py', 125, 'Method1', None),
+    )
+
+  def test_handles_excess_stacklevel(self):
+    """If stacklevel exceeds the stack depth, return the bottom frame."""
+    self.set_up_mock_frames()
+    self.assertEqual(
+        self.logger.findCaller(stacklevel=1000),
+        ('myfile.py', 249, 'Method2', None),
+    )
+
 
 class ABSLLogPrefixTest(parameterized.TestCase):
 
@@ -611,7 +681,7 @@ class ABSLLogPrefixTest(parameterized.TestCase):
   def test_default_prefixes(self, levelno, level_prefix):
     self.record.levelno = levelno
     self.record.created = 1494293880.378885
-    thread_id = '{: >5}'.format(logging._get_thread_id())
+    thread_id = f'{logging._get_thread_id(): >5}'
     # Use UTC so the test passes regardless of the local time zone.
     with mock.patch.object(time, 'localtime', side_effect=time.gmtime):
       self.assertEqual(
@@ -647,18 +717,19 @@ class ABSLLogPrefixTest(parameterized.TestCase):
     self.record.levelno = std_logging.CRITICAL
     self.record.created = 1494293880.378885
     self.record._absl_log_fatal = True
-    thread_id = '{: >5}'.format(logging._get_thread_id())
+    thread_id = f'{logging._get_thread_id(): >5}'
     # Use UTC so the test passes regardless of the local time zone.
     with mock.patch.object(time, 'localtime', side_effect=time.gmtime):
       self.assertEqual(
-          'F0509 01:38:00.378885 {} source.py:13] '.format(thread_id),
-          logging.get_absl_log_prefix(self.record))
+          f'F0509 01:38:00.378885 {thread_id} source.py:13] ',
+          logging.get_absl_log_prefix(self.record),
+      )
       time.localtime.assert_called_once_with(self.record.created)
 
   def test_critical_non_absl(self):
     self.record.levelno = std_logging.CRITICAL
     self.record.created = 1494293880.378885
-    thread_id = '{: >5}'.format(logging._get_thread_id())
+    thread_id = f'{logging._get_thread_id(): >5}'
     # Use UTC so the test passes regardless of the local time zone.
     with mock.patch.object(time, 'localtime', side_effect=time.gmtime):
       self.assertEqual(
@@ -818,6 +889,11 @@ class LoggingTest(absltest.TestCase):
   def test_exception_dict_format(self):
     # Just verify that this doesn't raise a TypeError.
     logging.exception('%(test)s', {'test': 'Hello world!'})
+
+  def test_exception_with_exc_info(self):
+    # Just verify that this doesn't raise a KeyeError.
+    logging.exception('exc_info=True', exc_info=True)
+    logging.exception('exc_info=False', exc_info=False)
 
   def test_logging_levels(self):
     old_level = logging.get_verbosity()
@@ -995,7 +1071,7 @@ class GetLogFileNameTest(parameterized.TestCase):
 
   def test_get_log_file_name_py_no_name(self):
 
-    class FakeFile(object):
+    class FakeFile:
       pass
 
     with override_python_handler_stream(FakeFile()):

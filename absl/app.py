@@ -85,7 +85,7 @@ class UsageError(Error):
   """
 
   def __init__(self, message, exitcode=1):
-    super(UsageError, self).__init__(message)
+    super().__init__(message)
     self.exitcode = exitcode
 
 
@@ -95,9 +95,13 @@ class HelpFlag(flags.BooleanFlag):
   SHORT_NAME = '?'
 
   def __init__(self):
-    super(HelpFlag, self).__init__(
-        self.NAME, False, 'show this help',
-        short_name=self.SHORT_NAME, allow_hide_cpp=True)
+    super().__init__(
+        self.NAME,
+        False,
+        'show this help',
+        short_name=self.SHORT_NAME,
+        allow_hide_cpp=True,
+    )
 
   def parse(self, arg):
     if self._parse(arg):
@@ -118,8 +122,7 @@ class HelpfullFlag(flags.BooleanFlag):
   """Display help for flags in the main module and all dependent modules."""
 
   def __init__(self):
-    super(HelpfullFlag, self).__init__(
-        'helpfull', False, 'show full help', allow_hide_cpp=True)
+    super().__init__('helpfull', False, 'show full help', allow_hide_cpp=True)
 
   def parse(self, arg):
     if self._parse(arg):
@@ -131,9 +134,12 @@ class HelpXMLFlag(flags.BooleanFlag):
   """Similar to HelpfullFlag, but generates output in XML format."""
 
   def __init__(self):
-    super(HelpXMLFlag, self).__init__(
-        'helpxml', False, 'like --helpfull, but generates XML output',
-        allow_hide_cpp=True)
+    super().__init__(
+        'helpxml',
+        False,
+        'like --helpfull, but generates XML output',
+        allow_hide_cpp=True,
+    )
 
   def parse(self, arg):
     if self._parse(arg):
@@ -192,10 +198,10 @@ def _register_and_parse_flags_with_usage(
 
   Args:
     argv: [str], a non-empty list of the command line arguments including
-        program name, sys.argv is used if None.
-    flags_parser: Callable[[List[Text]], Any], the function used to parse flags.
-        The return value of this function is passed to `main` untouched.
-        It must guarantee FLAGS is parsed after this function is called.
+      program name, sys.argv is used if None.
+    flags_parser: Callable[[List[str]], Any], the function used to parse flags.
+      The return value of this function is passed to `main` untouched. It must
+      guarantee FLAGS is parsed after this function is called.
 
   Returns:
     The return value of `flags_parser`. When using the default `flags_parser`,
@@ -207,6 +213,7 @@ def _register_and_parse_flags_with_usage(
     Error: Raised when flags_parser is called, but FLAGS is not parsed.
     SystemError: Raised when it's called more than once.
   """
+  # fmt: on
   if _register_and_parse_flags_with_usage.done:
     raise SystemError('Flag registration can be done only once.')
 
@@ -238,6 +245,7 @@ def _run_main(main, argv):
   elif FLAGS.run_with_profiling or FLAGS.profile_file:
     # Avoid import overhead since most apps (including performance-sensitive
     # ones) won't be run with profiling.
+    # pylint: disable=g-import-not-at-top
     import atexit
     if FLAGS.use_cprofile_for_profiling:
       import cProfile as profile
@@ -285,7 +293,7 @@ def run(
         For more details, see https://docs.python.org/3/library/sys#sys.exit
     argv: A non-empty list of the command line arguments including program name,
         sys.argv is used if None.
-    flags_parser: Callable[[List[Text]], Any], the function used to parse flags.
+    flags_parser: Callable[[List[str]], Any], the function used to parse flags.
         The return value of this function is passed to `main` untouched.
         It must guarantee FLAGS is parsed after this function is called.
         Should be passed as a keyword-only arg which will become mandatory in a
@@ -295,6 +303,7 @@ def run(
   - Calls main() with the remaining arguments.
   - If main() raises a UsageError, prints usage and the error message.
   """
+  # fmt: on
   try:
     args = _run_init(
         sys.argv if argv is None else argv,
@@ -425,7 +434,7 @@ def usage(shorthelp=False, writeto_stdout=False, detailed_error=None,
     stdfile.write('\n')
     if detailed_error is not None:
       stdfile.write('\n%s\n' % detailed_error)
-  except IOError as e:
+  except OSError as e:
     # We avoid printing a huge backtrace if we get EPIPE, because
     # "foo.par --help | less" is a frequent use case.
     if e.errno != errno.EPIPE:
@@ -434,7 +443,7 @@ def usage(shorthelp=False, writeto_stdout=False, detailed_error=None,
     sys.exit(exitcode)
 
 
-class ExceptionHandler(object):
+class ExceptionHandler:
   """Base exception handler from which other may inherit."""
 
   def wants(self, exc):

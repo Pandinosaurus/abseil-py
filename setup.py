@@ -17,15 +17,17 @@
 import os
 import sys
 
+# pylint: disable=g-import-not-at-top
 try:
   import setuptools
 except ImportError:
   from ez_setup import use_setuptools
   use_setuptools()
   import setuptools
+# pylint: enable=g-import-not-at-top
 
-if sys.version_info < (3, 7):
-  raise RuntimeError('Python version 3.7+ is required.')
+if sys.version_info < (3, 8):
+  raise RuntimeError('Python version 3.8+ is required.')
 
 setuptools_version = tuple(
     int(x) for x in setuptools.__version__.split('.')[:2])
@@ -34,7 +36,7 @@ additional_kwargs = {}
 if setuptools_version >= (24, 2):
   # `python_requires` was added in 24.2, see
   # https://packaging.python.org/guides/distributing-packages-using-setuptools/#python-requires
-  additional_kwargs['python_requires'] = '>=3.7'
+  additional_kwargs['python_requires'] = '>=3.8'
 
 _README_PATH = os.path.join(
     os.path.dirname(os.path.realpath(__file__)), 'README.md')
@@ -43,27 +45,34 @@ with open(_README_PATH, 'rb') as fp:
 
 setuptools.setup(
     name='absl-py',
-    version='2.0.0.dev0',
+    version='2.1.0',
     description=(
         'Abseil Python Common Libraries, '
-        'see https://github.com/abseil/abseil-py.'),
+        'see https://github.com/abseil/abseil-py.'
+    ),
     long_description=LONG_DESCRIPTION,
     long_description_content_type='text/markdown',
     author='The Abseil Authors',
     url='https://github.com/abseil/abseil-py',
-    packages=setuptools.find_packages(exclude=[
-        '*.tests', '*.tests.*', 'tests.*', 'tests',
-    ]),
+    packages=setuptools.find_packages(
+        exclude=[
+            '*.tests',
+            '*.tests.*',
+            'tests.*',
+            'tests',
+        ]
+    ),
     include_package_data=True,
     license='Apache 2.0',
     classifiers=[
         'Programming Language :: Python',
         'Programming Language :: Python :: 3',
-        'Programming Language :: Python :: 3.7',
         'Programming Language :: Python :: 3.8',
         'Programming Language :: Python :: 3.9',
         'Programming Language :: Python :: 3.10',
         'Programming Language :: Python :: 3.11',
+        'Programming Language :: Python :: 3.12',
+        'Programming Language :: Python :: 3.13',
         'Intended Audience :: Developers',
         'Topic :: Software Development :: Libraries :: Python Modules',
         'License :: OSI Approved :: Apache Software License',

@@ -1,4 +1,4 @@
-# Copyright 2017 The Abseil Authors.
+# Copyright 2023 The Abseil Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,17 +11,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-workspace(name = "io_abseil_py")
 
-load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+"""A helper test program with no tests ran for absltest_sharding_test."""
 
-http_archive(
-    name = "rules_python",
-    sha256 = "863ba0fa944319f7e3d695711427d9ad80ba92c6edd0b7c7443b84e904689539",
-    strip_prefix = "rules_python-0.22.0",
-    url = "https://github.com/bazelbuild/rules_python/releases/download/0.22.0/rules_python-0.22.0.tar.gz",
-)
+from absl.testing import absltest
 
-load("@rules_python//python:repositories.bzl", "py_repositories")
 
-py_repositories()
+class MyTest(absltest.TestCase):
+  pass
+
+
+if __name__ == "__main__":
+  absltest.main()

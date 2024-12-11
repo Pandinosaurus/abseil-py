@@ -17,8 +17,10 @@ Do NOT import this module directly. Import the flags package and use the
 aliases defined at the package level instead.
 """
 
+import enum
 import sys
 import types
+from typing import Any, Iterable, List, Literal, Optional, Type, TypeVar, Union, overload
 
 from absl.flags import _argument_parser
 from absl.flags import _exceptions
@@ -27,19 +29,10 @@ from absl.flags import _flagvalues
 from absl.flags import _helpers
 from absl.flags import _validators
 
-# pylint: disable=unused-import
-try:
-  from typing import Text, List, Any
-except ImportError:
-  pass
-
-try:
-  import enum
-except ImportError:
-  pass
-# pylint: enable=unused-import
-
 _helpers.disclaim_module_ids.add(id(sys.modules[__name__]))
+
+_T = TypeVar('_T')
+_ET = TypeVar('_ET', bound=enum.Enum)
 
 
 def _register_bounds_validator_if_needed(parser, name, flag_values):
@@ -60,6 +53,36 @@ def _register_bounds_validator_if_needed(parser, name, flag_values):
       return True
 
     _validators.register_validator(name, checker, flag_values=flag_values)
+
+
+@overload
+def DEFINE(  # pylint: disable=invalid-name
+    parser: _argument_parser.ArgumentParser[_T],
+    name: str,
+    default: Any,
+    help: Optional[str],  # pylint: disable=redefined-builtin
+    flag_values: _flagvalues.FlagValues = ...,
+    serializer: Optional[_argument_parser.ArgumentSerializer[_T]] = ...,
+    module_name: Optional[str] = ...,
+    required: Literal[True] = ...,
+    **args: Any
+) -> _flagvalues.FlagHolder[_T]:
+  ...
+
+
+@overload
+def DEFINE(  # pylint: disable=invalid-name
+    parser: _argument_parser.ArgumentParser[_T],
+    name: str,
+    default: Optional[Any],
+    help: Optional[str],  # pylint: disable=redefined-builtin
+    flag_values: _flagvalues.FlagValues = ...,
+    serializer: Optional[_argument_parser.ArgumentSerializer[_T]] = ...,
+    module_name: Optional[str] = ...,
+    required: bool = ...,
+    **args: Any
+) -> _flagvalues.FlagHolder[Optional[_T]]:
+  ...
 
 
 def DEFINE(  # pylint: disable=invalid-name
@@ -98,8 +121,31 @@ def DEFINE(  # pylint: disable=invalid-name
     a handle to defined flag.
   """
   return DEFINE_flag(
-      _flag.Flag(parser, serializer, name, default, help, **args), flag_values,
-      module_name, required)
+      _flag.Flag(parser, serializer, name, default, help, **args),
+      flag_values,
+      module_name,
+      required=True if required else False,
+  )
+
+
+@overload
+def DEFINE_flag(  # pylint: disable=invalid-name
+    flag: _flag.Flag[_T],
+    flag_values: _flagvalues.FlagValues = ...,
+    module_name: Optional[str] = ...,
+    required: Literal[True] = ...,
+) -> _flagvalues.FlagHolder[_T]:
+  ...
+
+
+@overload
+def DEFINE_flag(  # pylint: disable=invalid-name
+    flag: _flag.Flag[_T],
+    flag_values: _flagvalues.FlagValues = ...,
+    module_name: Optional[str] = ...,
+    required: bool = ...,
+) -> _flagvalues.FlagHolder[Optional[_T]]:
+  ...
 
 
 def DEFINE_flag(  # pylint: disable=invalid-name
@@ -148,7 +194,7 @@ def DEFINE_flag(  # pylint: disable=invalid-name
       fv, flag, ensure_non_none_value=ensure_non_none_value)
 
 
-def set_default(flag_holder, value):
+def set_default(flag_holder: _flagvalues.FlagHolder[_T], value: _T) -> None:
   """Changes the default value of the provided flag object.
 
   The flag's current value is also updated if the flag is currently using
@@ -165,9 +211,36 @@ def set_default(flag_holder, value):
   flag_holder._flagvalues.set_default(flag_holder.name, value)  # pylint: disable=protected-access
 
 
-def _internal_declare_key_flags(flag_names,
-                                flag_values=_flagvalues.FLAGS,
-                                key_flag_values=None):
+def override_value(flag_holder: _flagvalues.FlagHolder[_T], value: _T) -> None:
+  """Overrides the value of the provided flag.
+
+  This value takes precedent over the default value and, when called after flag
+  parsing, any value provided at the command line.
+
+  Args:
+    flag_holder: FlagHolder, the flag to modify.
+    value: The new value.
+
+  Raises:
+    IllegalFlagValueError: The value did not pass the flag parser or validators.
+  """
+  fv = flag_holder._flagvalues  # pylint: disable=protected-access
+  # Ensure the new value satisfies the flag's parser while avoiding side
+  # effects of calling parse().
+  parsed = fv[flag_holder.name]._parse(value)  # pylint: disable=protected-access
+  if parsed != value:
+    raise _exceptions.IllegalFlagValueError(
+        'flag %s: parsed value %r not equal to original %r'
+        % (flag_holder.name, parsed, value)
+    )
+  setattr(fv, flag_holder.name, value)
+
+
+def _internal_declare_key_flags(
+    flag_names: List[str],
+    flag_values: _flagvalues.FlagValues = _flagvalues.FLAGS,
+    key_flag_values: Optional[_flagvalues.FlagValues] = None,
+) -> None:
   """Declares a flag as key for the calling module.
 
   Internal function.  User code should call declare_key_flag or
@@ -195,7 +268,10 @@ def _internal_declare_key_flags(flag_names,
     key_flag_values.register_key_flag_for_module(module, flag_values[flag_name])
 
 
-def declare_key_flag(flag_name, flag_values=_flagvalues.FLAGS):
+def declare_key_flag(
+    flag_name: Union[str, _flagvalues.FlagHolder],
+    flag_values: _flagvalues.FlagValues = _flagvalues.FLAGS,
+) -> None:
   """Declares one flag as key to the current module.
 
   Key flags are flags that are deemed really important for a module.
@@ -237,7 +313,9 @@ def declare_key_flag(flag_name, flag_values=_flagvalues.FLAGS):
                      'first define it in Python.' % flag_name)
 
 
-def adopt_module_key_flags(module, flag_values=_flagvalues.FLAGS):
+def adopt_module_key_flags(
+    module: Any, flag_values: _flagvalues.FlagValues = _flagvalues.FLAGS
+) -> None:
   """Declares that all flags key to a module are key to the current module.
 
   Args:
@@ -269,7 +347,7 @@ def adopt_module_key_flags(module, flag_values=_flagvalues.FLAGS):
         key_flag_values=flag_values)
 
 
-def disclaim_key_flags():
+def disclaim_key_flags() -> None:
   """Declares that the current module will not define any more key flags.
 
   Normally, the module that calls the DEFINE_xxx functions claims the
@@ -288,16 +366,54 @@ def disclaim_key_flags():
   _helpers.disclaim_module_ids.add(id(module))
 
 
-def DEFINE_string(  # pylint: disable=invalid-name,redefined-builtin
+@overload
+def DEFINE_string(  # pylint: disable=invalid-name
+    name: str,
+    default: Optional[str],
+    help: Optional[str],  # pylint: disable=redefined-builtin
+    flag_values: _flagvalues.FlagValues = ...,
+    *,
+    required: Literal[True],
+    **args: Any
+) -> _flagvalues.FlagHolder[str]:
+  ...
+
+
+@overload
+def DEFINE_string(  # pylint: disable=invalid-name
+    name: str,
+    default: None,
+    help: Optional[str],  # pylint: disable=redefined-builtin
+    flag_values: _flagvalues.FlagValues = ...,
+    required: bool = ...,
+    **args: Any
+) -> _flagvalues.FlagHolder[Optional[str]]:
+  ...
+
+
+@overload
+def DEFINE_string(  # pylint: disable=invalid-name
+    name: str,
+    default: str,
+    help: Optional[str],  # pylint: disable=redefined-builtin
+    flag_values: _flagvalues.FlagValues = ...,
+    required: bool = ...,
+    **args: Any
+) -> _flagvalues.FlagHolder[str]:
+  ...
+
+
+def DEFINE_string(  # pylint: disable=invalid-name
     name,
     default,
-    help,
+    help,  # pylint: disable=redefined-builtin
     flag_values=_flagvalues.FLAGS,
     required=False,
-    **args):
+    **args
+):
   """Registers a flag whose value can be any string."""
-  parser = _argument_parser.ArgumentParser()
-  serializer = _argument_parser.ArgumentSerializer()
+  parser = _argument_parser.ArgumentParser[str]()
+  serializer = _argument_parser.ArgumentSerializer[str]()
   return DEFINE(
       parser,
       name,
@@ -305,18 +421,60 @@ def DEFINE_string(  # pylint: disable=invalid-name,redefined-builtin
       help,
       flag_values,
       serializer,
-      required=required,
-      **args)
+      required=True if required else False,
+      **args,
+  )
 
 
-def DEFINE_boolean(  # pylint: disable=invalid-name,redefined-builtin
+@overload
+def DEFINE_boolean(  # pylint: disable=invalid-name
+    name: str,
+    default: Union[None, str, bool, int],
+    help: Optional[str],  # pylint: disable=redefined-builtin
+    flag_values: _flagvalues.FlagValues = ...,
+    module_name: Optional[str] = ...,
+    *,
+    required: Literal[True],
+    **args: Any
+) -> _flagvalues.FlagHolder[bool]:
+  ...
+
+
+@overload
+def DEFINE_boolean(  # pylint: disable=invalid-name
+    name: str,
+    default: None,
+    help: Optional[str],  # pylint: disable=redefined-builtin
+    flag_values: _flagvalues.FlagValues = ...,
+    module_name: Optional[str] = ...,
+    required: bool = ...,
+    **args: Any
+) -> _flagvalues.FlagHolder[Optional[bool]]:
+  ...
+
+
+@overload
+def DEFINE_boolean(  # pylint: disable=invalid-name
+    name: str,
+    default: Union[str, bool, int],
+    help: Optional[str],  # pylint: disable=redefined-builtin
+    flag_values: _flagvalues.FlagValues = ...,
+    module_name: Optional[str] = ...,
+    required: bool = ...,
+    **args: Any
+) -> _flagvalues.FlagHolder[bool]:
+  ...
+
+
+def DEFINE_boolean(  # pylint: disable=invalid-name
     name,
     default,
-    help,
+    help,  # pylint: disable=redefined-builtin
     flag_values=_flagvalues.FLAGS,
     module_name=None,
     required=False,
-    **args):
+    **args
+):
   """Registers a boolean flag.
 
   Such a boolean flag does not take an argument.  If a user wants to
@@ -343,19 +501,66 @@ def DEFINE_boolean(  # pylint: disable=invalid-name,redefined-builtin
     a handle to defined flag.
   """
   return DEFINE_flag(
-      _flag.BooleanFlag(name, default, help, **args), flag_values, module_name,
-      required)
+      _flag.BooleanFlag(name, default, help, **args),
+      flag_values,
+      module_name,
+      required=True if required else False,
+  )
 
 
-def DEFINE_float(  # pylint: disable=invalid-name,redefined-builtin
+@overload
+def DEFINE_float(  # pylint: disable=invalid-name
+    name: str,
+    default: Union[None, float, str],
+    help: Optional[str],  # pylint: disable=redefined-builtin
+    lower_bound: Optional[float] = ...,
+    upper_bound: Optional[float] = ...,
+    flag_values: _flagvalues.FlagValues = ...,
+    *,
+    required: Literal[True],
+    **args: Any
+) -> _flagvalues.FlagHolder[float]:
+  ...
+
+
+@overload
+def DEFINE_float(  # pylint: disable=invalid-name
+    name: str,
+    default: None,
+    help: Optional[str],  # pylint: disable=redefined-builtin
+    lower_bound: Optional[float] = ...,
+    upper_bound: Optional[float] = ...,
+    flag_values: _flagvalues.FlagValues = ...,
+    required: bool = ...,
+    **args: Any
+) -> _flagvalues.FlagHolder[Optional[float]]:
+  ...
+
+
+@overload
+def DEFINE_float(  # pylint: disable=invalid-name
+    name: str,
+    default: Union[float, str],
+    help: Optional[str],  # pylint: disable=redefined-builtin
+    lower_bound: Optional[float] = ...,
+    upper_bound: Optional[float] = ...,
+    flag_values: _flagvalues.FlagValues = ...,
+    required: bool = ...,
+    **args: Any
+) -> _flagvalues.FlagHolder[float]:
+  ...
+
+
+def DEFINE_float(  # pylint: disable=invalid-name
     name,
     default,
-    help,
+    help,  # pylint: disable=redefined-builtin
     lower_bound=None,
     upper_bound=None,
     flag_values=_flagvalues.FLAGS,
     required=False,
-    **args):
+    **args
+):
   """Registers a flag whose value must be a float.
 
   If ``lower_bound`` or ``upper_bound`` are set, then this flag must be
@@ -382,24 +587,69 @@ def DEFINE_float(  # pylint: disable=invalid-name,redefined-builtin
       parser,
       name,
       default,
-      help,
+      help,  # pylint: disable=redefined-builtin
       flag_values,
       serializer,
-      required=required,
-      **args)
+      required=True if required else False,
+      **args,
+  )
   _register_bounds_validator_if_needed(parser, name, flag_values=flag_values)
   return result
 
 
-def DEFINE_integer(  # pylint: disable=invalid-name,redefined-builtin
+@overload
+def DEFINE_integer(  # pylint: disable=invalid-name
+    name: str,
+    default: Union[None, int, str],
+    help: Optional[str],  # pylint: disable=redefined-builtin
+    lower_bound: Optional[int] = ...,
+    upper_bound: Optional[int] = ...,
+    flag_values: _flagvalues.FlagValues = ...,
+    *,
+    required: Literal[True],
+    **args: Any
+) -> _flagvalues.FlagHolder[int]:
+  ...
+
+
+@overload
+def DEFINE_integer(  # pylint: disable=invalid-name
+    name: str,
+    default: None,
+    help: Optional[str],  # pylint: disable=redefined-builtin
+    lower_bound: Optional[int] = ...,
+    upper_bound: Optional[int] = ...,
+    flag_values: _flagvalues.FlagValues = ...,
+    required: bool = ...,
+    **args: Any
+) -> _flagvalues.FlagHolder[Optional[int]]:
+  ...
+
+
+@overload
+def DEFINE_integer(  # pylint: disable=invalid-name
+    name: str,
+    default: Union[int, str],
+    help: Optional[str],  # pylint: disable=redefined-builtin
+    lower_bound: Optional[int] = ...,
+    upper_bound: Optional[int] = ...,
+    flag_values: _flagvalues.FlagValues = ...,
+    required: bool = ...,
+    **args: Any
+) -> _flagvalues.FlagHolder[int]:
+  ...
+
+
+def DEFINE_integer(  # pylint: disable=invalid-name
     name,
     default,
-    help,
+    help,  # pylint: disable=redefined-builtin
     lower_bound=None,
     upper_bound=None,
     flag_values=_flagvalues.FLAGS,
     required=False,
-    **args):
+    **args
+):
   """Registers a flag whose value must be an integer.
 
   If ``lower_bound``, or ``upper_bound`` are set, then this flag must be
@@ -426,24 +676,69 @@ def DEFINE_integer(  # pylint: disable=invalid-name,redefined-builtin
       parser,
       name,
       default,
-      help,
+      help,  # pylint: disable=redefined-builtin
       flag_values,
       serializer,
-      required=required,
-      **args)
+      required=True if required else False,
+      **args,
+  )
   _register_bounds_validator_if_needed(parser, name, flag_values=flag_values)
   return result
 
 
-def DEFINE_enum(  # pylint: disable=invalid-name,redefined-builtin
+@overload
+def DEFINE_enum(  # pylint: disable=invalid-name
+    name: str,
+    default: Optional[str],
+    enum_values: Iterable[str],
+    help: Optional[str],  # pylint: disable=redefined-builtin
+    flag_values: _flagvalues.FlagValues = ...,
+    module_name: Optional[str] = ...,
+    *,
+    required: Literal[True],
+    **args: Any
+) -> _flagvalues.FlagHolder[str]:
+  ...
+
+
+@overload
+def DEFINE_enum(  # pylint: disable=invalid-name
+    name: str,
+    default: None,
+    enum_values: Iterable[str],
+    help: Optional[str],  # pylint: disable=redefined-builtin
+    flag_values: _flagvalues.FlagValues = ...,
+    module_name: Optional[str] = ...,
+    required: bool = ...,
+    **args: Any
+) -> _flagvalues.FlagHolder[Optional[str]]:
+  ...
+
+
+@overload
+def DEFINE_enum(  # pylint: disable=invalid-name
+    name: str,
+    default: str,
+    enum_values: Iterable[str],
+    help: Optional[str],  # pylint: disable=redefined-builtin
+    flag_values: _flagvalues.FlagValues = ...,
+    module_name: Optional[str] = ...,
+    required: bool = ...,
+    **args: Any
+) -> _flagvalues.FlagHolder[str]:
+  ...
+
+
+def DEFINE_enum(  # pylint: disable=invalid-name
     name,
     default,
     enum_values,
-    help,
+    help,  # pylint: disable=redefined-builtin
     flag_values=_flagvalues.FLAGS,
     module_name=None,
     required=False,
-    **args):
+    **args
+):
   """Registers a flag whose value can be any string from enum_values.
 
   Instead of a string enum, prefer `DEFINE_enum_class`, which allows
@@ -466,21 +761,72 @@ def DEFINE_enum(  # pylint: disable=invalid-name,redefined-builtin
   Returns:
     a handle to defined flag.
   """
-  return DEFINE_flag(
-      _flag.EnumFlag(name, default, help, enum_values, **args), flag_values,
-      module_name, required)
+  result = DEFINE_flag(
+      _flag.EnumFlag(name, default, help, enum_values, **args),
+      flag_values,
+      module_name,
+      required=True if required else False,
+  )
+  return result
 
 
-def DEFINE_enum_class(  # pylint: disable=invalid-name,redefined-builtin
+@overload
+def DEFINE_enum_class(  # pylint: disable=invalid-name
+    name: str,
+    default: Union[None, _ET, str],
+    enum_class: Type[_ET],
+    help: Optional[str],  # pylint: disable=redefined-builtin
+    flag_values: _flagvalues.FlagValues = ...,
+    module_name: Optional[str] = ...,
+    case_sensitive: bool = ...,
+    *,
+    required: Literal[True],
+    **args: Any
+) -> _flagvalues.FlagHolder[_ET]:
+  ...
+
+
+@overload
+def DEFINE_enum_class(  # pylint: disable=invalid-name
+    name: str,
+    default: None,
+    enum_class: Type[_ET],
+    help: Optional[str],  # pylint: disable=redefined-builtin
+    flag_values: _flagvalues.FlagValues = ...,
+    module_name: Optional[str] = ...,
+    case_sensitive: bool = ...,
+    required: bool = ...,
+    **args: Any
+) -> _flagvalues.FlagHolder[Optional[_ET]]:
+  ...
+
+
+@overload
+def DEFINE_enum_class(  # pylint: disable=invalid-name
+    name: str,
+    default: Union[_ET, str],
+    enum_class: Type[_ET],
+    help: Optional[str],  # pylint: disable=redefined-builtin
+    flag_values: _flagvalues.FlagValues = ...,
+    module_name: Optional[str] = ...,
+    case_sensitive: bool = ...,
+    required: bool = ...,
+    **args: Any
+) -> _flagvalues.FlagHolder[_ET]:
+  ...
+
+
+def DEFINE_enum_class(  # pylint: disable=invalid-name
     name,
     default,
     enum_class,
-    help,
+    help,  # pylint: disable=redefined-builtin
     flag_values=_flagvalues.FLAGS,
     module_name=None,
     case_sensitive=False,
     required=False,
-    **args):
+    **args
+):
   """Registers a flag whose value can be the name of enum members.
 
   Args:
@@ -501,23 +847,63 @@ def DEFINE_enum_class(  # pylint: disable=invalid-name,redefined-builtin
   Returns:
     a handle to defined flag.
   """
-  return DEFINE_flag(
+  # NOTE: pytype fails if this is a direct return.
+  result = DEFINE_flag(
       _flag.EnumClassFlag(
-          name,
-          default,
-          help,
-          enum_class,
-          case_sensitive=case_sensitive,
-          **args), flag_values, module_name, required)
+          name, default, help, enum_class, case_sensitive=case_sensitive, **args
+      ),
+      flag_values,
+      module_name,
+      required=True if required else False,
+  )
+  return result
 
 
-def DEFINE_list(  # pylint: disable=invalid-name,redefined-builtin
+@overload
+def DEFINE_list(  # pylint: disable=invalid-name
+    name: str,
+    default: Union[None, Iterable[str], str],
+    help: str,  # pylint: disable=redefined-builtin
+    flag_values: _flagvalues.FlagValues = ...,
+    *,
+    required: Literal[True],
+    **args: Any
+) -> _flagvalues.FlagHolder[List[str]]:
+  ...
+
+
+@overload
+def DEFINE_list(  # pylint: disable=invalid-name
+    name: str,
+    default: None,
+    help: str,  # pylint: disable=redefined-builtin
+    flag_values: _flagvalues.FlagValues = ...,
+    required: bool = ...,
+    **args: Any
+) -> _flagvalues.FlagHolder[Optional[List[str]]]:
+  ...
+
+
+@overload
+def DEFINE_list(  # pylint: disable=invalid-name
+    name: str,
+    default: Union[Iterable[str], str],
+    help: str,  # pylint: disable=redefined-builtin
+    flag_values: _flagvalues.FlagValues = ...,
+    required: bool = ...,
+    **args: Any
+) -> _flagvalues.FlagHolder[List[str]]:
+  ...
+
+
+def DEFINE_list(  # pylint: disable=invalid-name
     name,
     default,
-    help,
+    help,  # pylint: disable=redefined-builtin
     flag_values=_flagvalues.FLAGS,
     required=False,
-    **args):
+    **args
+):
   """Registers a flag whose value is a comma-separated list of strings.
 
   The flag value is parsed with a CSV parser.
@@ -545,18 +931,60 @@ def DEFINE_list(  # pylint: disable=invalid-name,redefined-builtin
       help,
       flag_values,
       serializer,
-      required=required,
-      **args)
+      required=True if required else False,
+      **args,
+  )
 
 
-def DEFINE_spaceseplist(  # pylint: disable=invalid-name,redefined-builtin
+@overload
+def DEFINE_spaceseplist(  # pylint: disable=invalid-name
+    name: str,
+    default: Union[None, Iterable[str], str],
+    help: str,  # pylint: disable=redefined-builtin
+    comma_compat: bool = ...,
+    flag_values: _flagvalues.FlagValues = ...,
+    *,
+    required: Literal[True],
+    **args: Any
+) -> _flagvalues.FlagHolder[List[str]]:
+  ...
+
+
+@overload
+def DEFINE_spaceseplist(  # pylint: disable=invalid-name
+    name: str,
+    default: None,
+    help: str,  # pylint: disable=redefined-builtin
+    comma_compat: bool = ...,
+    flag_values: _flagvalues.FlagValues = ...,
+    required: bool = ...,
+    **args: Any
+) -> _flagvalues.FlagHolder[Optional[List[str]]]:
+  ...
+
+
+@overload
+def DEFINE_spaceseplist(  # pylint: disable=invalid-name
+    name: str,
+    default: Union[Iterable[str], str],
+    help: str,  # pylint: disable=redefined-builtin
+    comma_compat: bool = ...,
+    flag_values: _flagvalues.FlagValues = ...,
+    required: bool = ...,
+    **args: Any
+) -> _flagvalues.FlagHolder[List[str]]:
+  ...
+
+
+def DEFINE_spaceseplist(  # pylint: disable=invalid-name
     name,
     default,
-    help,
+    help,  # pylint: disable=redefined-builtin
     comma_compat=False,
     flag_values=_flagvalues.FLAGS,
     required=False,
-    **args):
+    **args
+):
   """Registers a flag whose value is a whitespace-separated list of strings.
 
   Any whitespace can be used as a separator.
@@ -588,20 +1016,99 @@ def DEFINE_spaceseplist(  # pylint: disable=invalid-name,redefined-builtin
       help,
       flag_values,
       serializer,
-      required=required,
-      **args)
+      required=True if required else False,
+      **args,
+  )
 
 
-def DEFINE_multi(  # pylint: disable=invalid-name,redefined-builtin
+@overload
+def DEFINE_multi(  # pylint: disable=invalid-name
+    parser: _argument_parser.ArgumentParser[_T],
+    serializer: _argument_parser.ArgumentSerializer[_T],
+    name: str,
+    default: Iterable[_T],
+    help: str,  # pylint: disable=redefined-builtin
+    flag_values: _flagvalues.FlagValues = ...,
+    module_name: Optional[str] = ...,
+    *,
+    required: Literal[True],
+    **args: Any
+) -> _flagvalues.FlagHolder[List[_T]]:
+  ...
+
+
+@overload
+def DEFINE_multi(  # pylint: disable=invalid-name
+    parser: _argument_parser.ArgumentParser[_T],
+    serializer: _argument_parser.ArgumentSerializer[_T],
+    name: str,
+    default: Union[None, _T],
+    help: str,  # pylint: disable=redefined-builtin
+    flag_values: _flagvalues.FlagValues = ...,
+    module_name: Optional[str] = ...,
+    *,
+    required: Literal[True],
+    **args: Any
+) -> _flagvalues.FlagHolder[List[_T]]:
+  ...
+
+
+@overload
+def DEFINE_multi(  # pylint: disable=invalid-name
+    parser: _argument_parser.ArgumentParser[_T],
+    serializer: _argument_parser.ArgumentSerializer[_T],
+    name: str,
+    default: None,
+    help: str,  # pylint: disable=redefined-builtin
+    flag_values: _flagvalues.FlagValues = ...,
+    module_name: Optional[str] = ...,
+    required: bool = ...,
+    **args: Any
+) -> _flagvalues.FlagHolder[Optional[List[_T]]]:
+  ...
+
+
+@overload
+def DEFINE_multi(  # pylint: disable=invalid-name
+    parser: _argument_parser.ArgumentParser[_T],
+    serializer: _argument_parser.ArgumentSerializer[_T],
+    name: str,
+    default: Iterable[_T],
+    help: str,  # pylint: disable=redefined-builtin
+    flag_values: _flagvalues.FlagValues = ...,
+    module_name: Optional[str] = ...,
+    required: bool = ...,
+    **args: Any
+) -> _flagvalues.FlagHolder[List[_T]]:
+  ...
+
+
+@overload
+def DEFINE_multi(  # pylint: disable=invalid-name
+    parser: _argument_parser.ArgumentParser[_T],
+    serializer: _argument_parser.ArgumentSerializer[_T],
+    name: str,
+    default: _T,
+    help: str,  # pylint: disable=redefined-builtin
+    flag_values: _flagvalues.FlagValues = ...,
+    module_name: Optional[str] = ...,
+    required: bool = ...,
+    **args: Any
+) -> _flagvalues.FlagHolder[List[_T]]:
+  ...
+
+
+def DEFINE_multi(  # pylint: disable=invalid-name
     parser,
     serializer,
     name,
     default,
-    help,
+    help,  # pylint: disable=redefined-builtin
     flag_values=_flagvalues.FLAGS,
     module_name=None,
     required=False,
-    **args):
+    **args
+):
   """Registers a generic MultiFlag that parses its args with a given parser.
 
   Auxiliary function.  Normal users should NOT use it directly.
@@ -614,7 +1121,7 @@ def DEFINE_multi(  # pylint: disable=invalid-name,redefined-builtin
     parser: ArgumentParser, used to parse the flag arguments.
     serializer: ArgumentSerializer, the flag serializer instance.
     name: str, the flag name.
-    default: Union[Iterable[T], Text, None], the default value of the flag. If
+    default: Union[Iterable[T], str, None], the default value of the flag. If
       the value is text, it will be parsed as if it was provided from the
       command line. If the value is a non-string iterable, it will be iterated
       over to create a shallow copy of the values. If it is None, it is left
@@ -632,18 +1139,60 @@ def DEFINE_multi(  # pylint: disable=invalid-name,redefined-builtin
   Returns:
     a handle to defined flag.
   """
-  return DEFINE_flag(
+  result = DEFINE_flag(
       _flag.MultiFlag(parser, serializer, name, default, help, **args),
-      flag_values, module_name, required)
+      flag_values,
+      module_name,
+      required=True if required else False,
+  )
+  return result
 
 
-def DEFINE_multi_string(  # pylint: disable=invalid-name,redefined-builtin
+@overload
+def DEFINE_multi_string(  # pylint: disable=invalid-name
+    name: str,
+    default: Union[None, Iterable[str], str],
+    help: str,  # pylint: disable=redefined-builtin
+    flag_values: _flagvalues.FlagValues = ...,
+    *,
+    required: Literal[True],
+    **args: Any
+) -> _flagvalues.FlagHolder[List[str]]:
+  ...
+
+
+@overload
+def DEFINE_multi_string(  # pylint: disable=invalid-name
+    name: str,
+    default: None,
+    help: str,  # pylint: disable=redefined-builtin
+    flag_values: _flagvalues.FlagValues = ...,
+    required: bool = ...,
+    **args: Any
+) -> _flagvalues.FlagHolder[Optional[List[str]]]:
+  ...
+
+
+@overload
+def DEFINE_multi_string(  # pylint: disable=invalid-name
+    name: str,
+    default: Union[Iterable[str], str],
+    help: str,  # pylint: disable=redefined-builtin
+    flag_values: _flagvalues.FlagValues = ...,
+    required: bool = ...,
+    **args: Any
+) -> _flagvalues.FlagHolder[List[str]]:
+  ...
+
+
+def DEFINE_multi_string(  # pylint: disable=invalid-name
     name,
     default,
-    help,
+    help,  # pylint: disable=redefined-builtin
     flag_values=_flagvalues.FLAGS,
     required=False,
-    **args):
+    **args
+):
   """Registers a flag whose value can be a list of any strings.
 
   Use the flag on the command line multiple times to place multiple
@@ -654,8 +1203,8 @@ def DEFINE_multi_string(  # pylint: disable=invalid-name,redefined-builtin
 
   Args:
     name: str, the flag name.
-    default: Union[Iterable[Text], Text, None], the default value of the flag;
-      see :func:`DEFINE_multi`.
+    default: Union[Iterable[str], str, None], the default value of the flag; see
+      :func:`DEFINE_multi`.
     help: str, the help message.
     flag_values: :class:`FlagValues`, the FlagValues instance with which the
       flag will be registered. This should almost never need to be overridden.
@@ -674,21 +1223,66 @@ def DEFINE_multi_string(  # pylint: disable=invalid-name,redefined-builtin
       serializer,
       name,
       default,
-      help,
+      help,  # pylint: disable=redefined-builtin
       flag_values,
-      required=required,
-      **args)
+      required=True if required else False,
+      **args,
+  )
 
 
-def DEFINE_multi_integer(  # pylint: disable=invalid-name,redefined-builtin
+@overload
+def DEFINE_multi_integer(  # pylint: disable=invalid-name
+    name: str,
+    default: Union[None, Iterable[int], int, str],
+    help: str,  # pylint: disable=redefined-builtin
+    lower_bound: Optional[int] = ...,
+    upper_bound: Optional[int] = ...,
+    flag_values: _flagvalues.FlagValues = ...,
+    *,
+    required: Literal[True],
+    **args: Any
+) -> _flagvalues.FlagHolder[List[int]]:
+  ...
+
+
+@overload
+def DEFINE_multi_integer(  # pylint: disable=invalid-name
+    name: str,
+    default: None,
+    help: str,  # pylint: disable=redefined-builtin
+    lower_bound: Optional[int] = ...,
+    upper_bound: Optional[int] = ...,
+    flag_values: _flagvalues.FlagValues = ...,
+    required: bool = ...,
+    **args: Any
+) -> _flagvalues.FlagHolder[Optional[List[int]]]:
+  ...
+
+
+@overload
+def DEFINE_multi_integer(  # pylint: disable=invalid-name
+    name: str,
+    default: Union[Iterable[int], int, str],
+    help: str,  # pylint: disable=redefined-builtin
+    lower_bound: Optional[int] = ...,
+    upper_bound: Optional[int] = ...,
+    flag_values: _flagvalues.FlagValues = ...,
+    required: bool = ...,
+    **args: Any
+) -> _flagvalues.FlagHolder[List[int]]:
+  ...
+
+
+def DEFINE_multi_integer(  # pylint: disable=invalid-name
     name,
     default,
-    help,
+    help,  # pylint: disable=redefined-builtin
     lower_bound=None,
     upper_bound=None,
     flag_values=_flagvalues.FLAGS,
     required=False,
-    **args):
+    **args
+):
   """Registers a flag whose value can be a list of arbitrary integers.
 
   Use the flag on the command line multiple times to place multiple
@@ -698,8 +1292,8 @@ def DEFINE_multi_integer(  # pylint: disable=invalid-name,redefined-builtin
 
   Args:
     name: str, the flag name.
-    default: Union[Iterable[int], Text, None], the default value of the flag;
-      see `DEFINE_multi`.
+    default: Union[Iterable[int], str, None], the default value of the flag; see
+      `DEFINE_multi`.
     help: str, the help message.
     lower_bound: int, min values of the flag.
     upper_bound: int, max values of the flag.
@@ -720,21 +1314,66 @@ def DEFINE_multi_integer(  # pylint: disable=invalid-name,redefined-builtin
       serializer,
       name,
       default,
-      help,
+      help,  # pylint: disable=redefined-builtin
       flag_values,
-      required=required,
-      **args)
+      required=True if required else False,
+      **args,
+  )
 
 
-def DEFINE_multi_float(  # pylint: disable=invalid-name,redefined-builtin
+@overload
+def DEFINE_multi_float(  # pylint: disable=invalid-name
+    name: str,
+    default: Union[None, Iterable[float], float, str],
+    help: str,  # pylint: disable=redefined-builtin
+    lower_bound: Optional[float] = ...,
+    upper_bound: Optional[float] = ...,
+    flag_values: _flagvalues.FlagValues = ...,
+    *,
+    required: Literal[True],
+    **args: Any
+) -> _flagvalues.FlagHolder[List[float]]:
+  ...
+
+
+@overload
+def DEFINE_multi_float(  # pylint: disable=invalid-name
+    name: str,
+    default: None,
+    help: str,  # pylint: disable=redefined-builtin
+    lower_bound: Optional[float] = ...,
+    upper_bound: Optional[float] = ...,
+    flag_values: _flagvalues.FlagValues = ...,
+    required: bool = ...,
+    **args: Any
+) -> _flagvalues.FlagHolder[Optional[List[float]]]:
+  ...
+
+
+@overload
+def DEFINE_multi_float(  # pylint: disable=invalid-name
+    name: str,
+    default: Union[Iterable[float], float, str],
+    help: str,  # pylint: disable=redefined-builtin
+    lower_bound: Optional[float] = ...,
+    upper_bound: Optional[float] = ...,
+    flag_values: _flagvalues.FlagValues = ...,
+    required: bool = ...,
+    **args: Any
+) -> _flagvalues.FlagHolder[List[float]]:
+  ...
+
+
+def DEFINE_multi_float(  # pylint: disable=invalid-name
     name,
     default,
-    help,
+    help,  # pylint: disable=redefined-builtin
     lower_bound=None,
     upper_bound=None,
     flag_values=_flagvalues.FLAGS,
     required=False,
-    **args):
+    **args
+):
   """Registers a flag whose value can be a list of arbitrary floats.
 
   Use the flag on the command line multiple times to place multiple
@@ -744,7 +1383,7 @@ def DEFINE_multi_float(  # pylint: disable=invalid-name,redefined-builtin
 
   Args:
     name: str, the flag name.
-    default: Union[Iterable[float], Text, None], the default value of the flag;
+    default: Union[Iterable[float], str, None], the default value of the flag;
       see `DEFINE_multi`.
     help: str, the help message.
     lower_bound: float, min values of the flag.
@@ -768,19 +1407,61 @@ def DEFINE_multi_float(  # pylint: disable=invalid-name,redefined-builtin
       default,
       help,
       flag_values,
-      required=required,
-      **args)
+      required=True if required else False,
+      **args,
+  )
 
 
-def DEFINE_multi_enum(  # pylint: disable=invalid-name,redefined-builtin
+@overload
+def DEFINE_multi_enum(  # pylint: disable=invalid-name
+    name: str,
+    default: Union[None, Iterable[str], str],
+    enum_values: Iterable[str],
+    help: str,  # pylint: disable=redefined-builtin
+    flag_values: _flagvalues.FlagValues = ...,
+    *,
+    required: Literal[True],
+    **args: Any
+) -> _flagvalues.FlagHolder[List[str]]:
+  ...
+
+
+@overload
+def DEFINE_multi_enum(  # pylint: disable=invalid-name
+    name: str,
+    default: None,
+    enum_values: Iterable[str],
+    help: str,  # pylint: disable=redefined-builtin
+    flag_values: _flagvalues.FlagValues = ...,
+    required: bool = ...,
+    **args: Any
+) -> _flagvalues.FlagHolder[Optional[List[str]]]:
+  ...
+
+
+@overload
+def DEFINE_multi_enum(  # pylint: disable=invalid-name
+    name: str,
+    default: Union[Iterable[str], str],
+    enum_values: Iterable[str],
+    help: str,  # pylint: disable=redefined-builtin
+    flag_values: _flagvalues.FlagValues = ...,
+    required: bool = ...,
+    **args: Any
+) -> _flagvalues.FlagHolder[List[str]]:
+  ...
+
+
+def DEFINE_multi_enum(  # pylint: disable=invalid-name
     name,
     default,
     enum_values,
-    help,
+    help,  # pylint: disable=redefined-builtin
     flag_values=_flagvalues.FLAGS,
     case_sensitive=True,
     required=False,
-    **args):
+    **args
+):
   """Registers a flag whose value can be a list strings from enum_values.
 
   Use the flag on the command line multiple times to place multiple
@@ -790,8 +1471,8 @@ def DEFINE_multi_enum(  # pylint: disable=invalid-name,redefined-builtin
 
   Args:
     name: str, the flag name.
-    default: Union[Iterable[Text], Text, None], the default value of the flag;
-      see `DEFINE_multi`.
+    default: Union[Iterable[str], str, None], the default value of the flag; see
+      `DEFINE_multi`.
     enum_values: [str], a non-empty list of strings with the possible values for
       the flag.
     help: str, the help message.
@@ -815,20 +1496,102 @@ def DEFINE_multi_enum(  # pylint: disable=invalid-name,redefined-builtin
       default,
       '<%s>: %s' % ('|'.join(enum_values), help),
       flag_values,
-      required=required,
-      **args)
+      required=True if required else False,
+      **args,
+  )
 
 
-def DEFINE_multi_enum_class(  # pylint: disable=invalid-name,redefined-builtin
+@overload
+def DEFINE_multi_enum_class(  # pylint: disable=invalid-name
+    name: str,
+    # This is separate from `Union[None, _ET, Iterable[str], str]` to avoid a
+    # Pytype issue inferring the return value to
+    # FlagHolder[List[Union[_ET, enum.Enum]]] when an iterable of concrete enum
+    # subclasses are used.
+    default: Iterable[_ET],
+    enum_class: Type[_ET],
+    help: str,  # pylint: disable=redefined-builtin
+    flag_values: _flagvalues.FlagValues = ...,
+    module_name: Optional[str] = ...,
+    *,
+    required: Literal[True],
+    **args: Any
+) -> _flagvalues.FlagHolder[List[_ET]]:
+  ...
+
+
+@overload
+def DEFINE_multi_enum_class(  # pylint: disable=invalid-name
+    name: str,
+    default: Union[None, _ET, Iterable[str], str],
+    enum_class: Type[_ET],
+    help: str,  # pylint: disable=redefined-builtin
+    flag_values: _flagvalues.FlagValues = ...,
+    module_name: Optional[str] = ...,
+    *,
+    required: Literal[True],
+    **args: Any
+) -> _flagvalues.FlagHolder[List[_ET]]:
+  ...
+
+
+@overload
+def DEFINE_multi_enum_class(  # pylint: disable=invalid-name
+    name: str,
+    default: None,
+    enum_class: Type[_ET],
+    help: str,  # pylint: disable=redefined-builtin
+    flag_values: _flagvalues.FlagValues = ...,
+    module_name: Optional[str] = ...,
+    required: bool = ...,
+    **args: Any
+) -> _flagvalues.FlagHolder[Optional[List[_ET]]]:
+  ...
+
+
+@overload
+def DEFINE_multi_enum_class(  # pylint: disable=invalid-name
+    name: str,
+    # This is separate from `Union[None, _ET, Iterable[str], str]` to avoid a
+    # Pytype issue inferring the return value to
+    # FlagHolder[List[Union[_ET, enum.Enum]]] when an iterable of concrete enum
+    # subclasses are used.
+    default: Iterable[_ET],
+    enum_class: Type[_ET],
+    help: str,  # pylint: disable=redefined-builtin
+    flag_values: _flagvalues.FlagValues = ...,
+    module_name: Optional[str] = ...,
+    required: bool = ...,
+    **args: Any
+) -> _flagvalues.FlagHolder[List[_ET]]:
+  ...
+
+
+@overload
+def DEFINE_multi_enum_class(  # pylint: disable=invalid-name
+    name: str,
+    default: Union[_ET, Iterable[str], str],
+    enum_class: Type[_ET],
+    help: str,  # pylint: disable=redefined-builtin
+    flag_values: _flagvalues.FlagValues = ...,
+    module_name: Optional[str] = ...,
+    required: bool = ...,
+    **args: Any
+) -> _flagvalues.FlagHolder[List[_ET]]:
+  ...
+
+
+def DEFINE_multi_enum_class(  # pylint: disable=invalid-name
     name,
     default,
     enum_class,
-    help,
+    help,  # pylint: disable=redefined-builtin
     flag_values=_flagvalues.FLAGS,
     module_name=None,
     case_sensitive=False,
     required=False,
-    **args):
+    **args
+):
   """Registers a flag whose value can be a list of enum members.
 
   Use the flag on the command line multiple times to place multiple
@@ -836,11 +1599,11 @@ def DEFINE_multi_enum_class(  # pylint: disable=invalid-name,redefined-builtin
 
   Args:
     name: str, the flag name.
-    default: Union[Iterable[Enum], Iterable[Text], Enum, Text, None], the
-      default value of the flag; see `DEFINE_multi`; only differences are
-      documented here. If the value is a single Enum, it is treated as a
-      single-item list of that Enum value. If it is an iterable, text values
-      within the iterable will be converted to the equivalent Enum objects.
+    default: Union[Iterable[Enum], Iterable[str], Enum, str, None], the default
+      value of the flag; see `DEFINE_multi`; only differences are documented
+      here. If the value is a single Enum, it is treated as a single-item list
+      of that Enum value. If it is an iterable, text values within the iterable
+      will be converted to the equivalent Enum objects.
     enum_class: class, the Enum class with all the possible values for the flag.
         help: str, the help message.
     flag_values: :class:`FlagValues`, the FlagValues instance with which the
@@ -857,7 +1620,8 @@ def DEFINE_multi_enum_class(  # pylint: disable=invalid-name,redefined-builtin
   Returns:
     a handle to defined flag.
   """
-  return DEFINE_flag(
+  # NOTE: pytype fails if this is a direct return.
+  result = DEFINE_flag(
       _flag.MultiEnumClassFlag(
           name,
           default,
@@ -868,15 +1632,17 @@ def DEFINE_multi_enum_class(  # pylint: disable=invalid-name,redefined-builtin
       ),
       flag_values,
       module_name,
-      required=required,
+      required=True if required else False,
   )
+  return result
 
 
 def DEFINE_alias(  # pylint: disable=invalid-name
-    name,
-    original_name,
-    flag_values=_flagvalues.FLAGS,
-    module_name=None):
+    name: str,
+    original_name: str,
+    flag_values: _flagvalues.FlagValues = _flagvalues.FLAGS,
+    module_name: Optional[str] = None,
+) -> _flagvalues.FlagHolder[Any]:
   """Defines an alias flag for an existing one.
 
   Args:
